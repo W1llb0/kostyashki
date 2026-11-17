@@ -1,0 +1,1699 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Костяшки</title>
+<meta name="description" content="Дуэль на кубиках: ставь кости в колонки, сжигай кости соперника, проходи поход с дарами или играй онлайн с другом.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='7' fill='%23efe5cf'/%3E%3Ccircle cx='10' cy='10' r='3' fill='%232a1b14'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%232a1b14'/%3E%3Ccircle cx='22' cy='22' r='3' fill='%232a1b14'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+SC:wght@600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<!-- PeerJS: browser-to-browser connection for online duels (uses the free public PeerJS signalling server) -->
+<script async src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+:root{
+  --bg:#140e0c;
+  --wood-edge:#3b2a1d;
+  --slot:#0e0908; --slot-edge:#2e2119;
+  --bone:#efe5cf; --bone-shade:#c9b998; --pip:#2a1b14;
+  --m2:#f0c75a; --m2-shade:#bf9026;
+  --m3:#86c9d6; --m3-shade:#4a93a4;
+  --ember:#e8743b; --ember-soft:rgba(232,116,59,.16);
+  --blood:#d4402f;
+  --text:#f2e8d8; --muted:#a39182;
+  --cell:min(72px, 15vw, 8.4vh);
+  --gap:calc(var(--cell) * .1);
+  --font-display:'Cormorant SC', Georgia, 'Times New Roman', serif;
+  --font-ui:'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{
+  background:radial-gradient(ellipse at 50% 45%, #3a2014 0%, #1b110d 48%, #0b0706 100%) fixed, var(--bg);
+  color:var(--text); font-family:var(--font-ui);
+  -webkit-tap-highlight-color:transparent; overflow-x:hidden;
+}
+button{font:inherit;color:inherit}
+#app{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column}
+
+/* top bar */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px;max-width:1100px;width:100%;margin:0 auto}
+.logo{font-family:var(--font-display);font-size:clamp(22px,4vw,30px);margin:0;letter-spacing:.06em;color:var(--bone)}
+.icon-btn{background:transparent;border:1px solid var(--wood-edge);color:var(--muted);padding:8px 14px;border-radius:999px;font-size:14px;cursor:pointer;transition:color .15s,border-color .15s}
+.icon-btn:hover,.icon-btn:focus-visible{color:var(--text);border-color:var(--ember);outline:none}
+
+/* table layout */
+.table{flex:1;display:grid;grid-template-columns:1fr auto 1fr;grid-template-areas:"p0 arena p1";gap:24px;padding:8px 16px 24px;max-width:1100px;width:100%;margin:0 auto;align-items:stretch}
+.arena{grid-area:arena;display:flex;flex-direction:column;align-items:center;padding:calc(var(--cell)*.25);background:linear-gradient(#2a1c13,#1f150e);border:1px solid var(--wood-edge);border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.03)}
+#panel0{grid-area:p0;align-self:end}
+#panel1{grid-area:p1;align-self:start}
+.panel{display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px;border-radius:18px;border:1px solid transparent;transition:background .3s,border-color .3s}
+.panel.turn{background:var(--ember-soft);border-color:rgba(232,116,59,.45)}
+.who{text-align:center}
+.name{font-family:var(--font-display);font-size:26px;color:var(--bone);line-height:1.1;overflow-wrap:anywhere}
+.tag{font-size:12px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;min-height:15px}
+.total{font-size:44px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1;display:inline-block}
+.tray{width:calc(var(--cell)*1.5);height:calc(var(--cell)*1.5);border-radius:18px;background:var(--slot);border:1px dashed var(--slot-edge);display:grid;place-items:center;padding:calc(var(--cell)*.22);flex:none}
+.tray .die{width:100%;height:100%}
+.relics{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;max-width:240px}
+.relics:empty,.abil:empty{display:none}
+.relic{width:34px;height:34px;border-radius:10px;background:var(--slot);border:1px solid var(--slot-edge);display:grid;place-items:center;font-size:18px;cursor:pointer;padding:0;line-height:1}
+.relic:hover,.relic:focus-visible{border-color:var(--ember);outline:none}
+.relic-more{background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;text-underline-offset:3px;cursor:pointer;padding:4px 2px}
+.relic-more:hover{color:var(--text)}
+.abil{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.abil button{background:var(--slot);border:1px solid var(--wood-edge);border-radius:999px;padding:7px 12px;font-size:13px;cursor:pointer;white-space:nowrap}
+.abil button:disabled{opacity:.38;cursor:default}
+.abil button:not(:disabled):hover,.abil button:not(:disabled):focus-visible{border-color:var(--ember);outline:none}
+
+/* boards */
+.board{display:grid;grid-template-columns:repeat(3,auto);gap:var(--gap)}
+.col{display:grid;grid-template-rows:repeat(3,var(--cell));gap:var(--gap);padding:var(--gap);margin:0;background:transparent;border:2px solid transparent;border-radius:16px;cursor:default;transition:border-color .15s,background .15s}
+.col:disabled{cursor:default}
+.col.shielded{box-shadow:inset 0 0 0 1px rgba(134,201,214,.45),inset 0 0 16px rgba(134,201,214,.14)}
+.col.shatter{animation:shatter .55s ease-out}
+@keyframes shatter{30%{box-shadow:inset 0 0 0 3px var(--m3),0 0 26px rgba(134,201,214,.7)}}
+.board.active .col:not(.full){cursor:pointer;border-color:rgba(232,116,59,.22)}
+.board.active .col:not(.full):hover,.board.active .col:not(.full):focus-visible{border-color:var(--ember);background:var(--ember-soft);outline:none}
+.cell{width:var(--cell);height:var(--cell);border-radius:22%;background:var(--slot);box-shadow:inset 0 2px 6px rgba(0,0,0,.7),inset 0 0 0 1px var(--slot-edge);display:grid;place-items:center}
+.colscores{display:grid;grid-template-columns:repeat(3,auto);gap:var(--gap)}
+.colscores span{width:calc(var(--cell) + var(--gap)*2 + 4px);text-align:center;font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;height:28px;line-height:28px;color:var(--bone);transition:color .2s}
+.colscores span.zero{color:#5a4a3e}
+.divider{width:100%;display:flex;align-items:center;justify-content:center;min-height:36px;margin:2px 0;position:relative}
+.divider::before{content:'';position:absolute;left:0;right:0;top:50%;height:1px;background:linear-gradient(90deg,transparent,var(--wood-edge),transparent)}
+#status{position:relative;background:#22170f;padding:5px 14px;border-radius:999px;border:1px solid var(--wood-edge);font-size:14px;color:var(--muted);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+#status.hot{color:var(--text);border-color:rgba(232,116,59,.6)}
+
+/* dice */
+.die{width:86%;height:86%;border-radius:20%;background:linear-gradient(145deg,#fbf4e3,var(--bone) 55%,var(--bone-shade));box-shadow:0 3px 0 var(--bone-shade),0 6px 12px rgba(0,0,0,.5);position:relative}
+.face{position:absolute;inset:15%;display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);gap:4%}
+.pip{border-radius:50%;background:var(--pip);transform:scale(0)}
+.pip.on{transform:scale(.84)}
+.die.m2{background:linear-gradient(145deg,#fde9ad,var(--m2) 60%,var(--m2-shade));box-shadow:0 3px 0 var(--m2-shade),0 0 14px rgba(240,199,90,.4),0 6px 12px rgba(0,0,0,.5)}
+.die.m3{background:linear-gradient(145deg,#d3f1f5,var(--m3) 60%,var(--m3-shade));box-shadow:0 3px 0 var(--m3-shade),0 0 16px rgba(134,201,214,.5),0 6px 12px rgba(0,0,0,.5)}
+.die.ghost{opacity:.35;box-shadow:none}
+.die.threat{box-shadow:0 0 0 3px var(--blood),0 0 18px rgba(212,64,47,.7);animation:threat .7s ease-in-out infinite alternate}
+.die.drop{animation:drop .32s cubic-bezier(.2,1.4,.4,1)}
+.die.burn{animation:burn .52s ease-in forwards}
+.die.rolling{animation:wobble .18s linear infinite}
+.die.landed{animation:land .3s ease-out}
+@keyframes drop{from{transform:scale(1.35) translateY(-10%);opacity:0}to{transform:none;opacity:1}}
+@keyframes burn{
+  0%{transform:none}
+  20%{transform:translateX(-4px) rotate(-6deg);background:#ffb39b}
+  40%{transform:translateX(4px) rotate(6deg);background:#ff7a5c}
+  60%{transform:translateX(-3px);filter:brightness(1.3)}
+  100%{transform:scale(.3) rotate(30deg);opacity:0;filter:blur(2px)}
+}
+@keyframes wobble{0%{transform:rotate(-12deg) scale(.94)}50%{transform:rotate(12deg) scale(1.06)}100%{transform:rotate(-12deg) scale(.94)}}
+@keyframes land{0%{transform:scale(1.2)}100%{transform:none}}
+@keyframes threat{to{transform:scale(.92)}}
+.bump{animation:bump .35s ease-out}
+@keyframes bump{50%{transform:scale(1.25);color:var(--m2)}}
+
+/* overlays */
+.overlay{position:fixed;inset:0;background:rgba(8,5,4,.8);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:grid;place-items:center;padding:16px;z-index:10;overflow-y:auto}
+.overlay.hidden{display:none}
+.card{background:linear-gradient(#2b1d14,#1c130d);border:1px solid var(--wood-edge);border-radius:22px;padding:28px 24px;width:min(440px,100%);box-shadow:0 30px 80px rgba(0,0,0,.7);text-align:center}
+.card.wide{width:min(680px,100%)}
+.card h2{font-family:var(--font-display);font-size:42px;margin:8px 0 2px;color:var(--bone);font-weight:700;line-height:1.05;overflow-wrap:anywhere}
+.sub{color:var(--muted);margin:0 0 18px}
+.card-dice{display:flex;justify-content:center;gap:10px}
+.card-dice .die{width:44px;height:44px}
+.card-dice .die:nth-child(1){transform:rotate(-10deg)}
+.card-dice .die:nth-child(3){transform:rotate(9deg)}
+.field{margin:14px 0;text-align:left}
+.label{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:6px}
+.seg{display:flex;background:var(--slot);border:1px solid var(--slot-edge);border-radius:12px;padding:4px;gap:4px}
+.seg button{flex:1;background:transparent;border:0;color:var(--muted);padding:10px 4px;border-radius:9px;font-size:14px;line-height:1.2;cursor:pointer;transition:background .15s,color .15s}
+.seg button:hover{color:var(--text)}
+.seg button.sel{background:var(--ember);color:#1b0f09;font-weight:600}
+.mode-hint{font-size:13px;color:var(--muted);margin:8px 2px 0;line-height:1.45}
+.btn{display:block;width:100%;padding:14px;border-radius:12px;font-weight:600;font-size:16px;cursor:pointer;margin-top:10px;border:1px solid transparent;transition:filter .15s,border-color .15s,opacity .15s}
+.btn.primary{background:var(--ember);color:#1b0f09}
+.btn.primary:hover{filter:brightness(1.1)}
+.btn.ghost{background:transparent;color:var(--text);border-color:var(--wood-edge)}
+.btn.ghost:hover{border-color:var(--ember)}
+.btn:disabled{opacity:.5;cursor:default;filter:none}
+.btn.hidden,.hidden-el{display:none!important}
+.inp{width:100%;background:var(--slot);border:1px solid var(--slot-edge);border-radius:12px;padding:12px 14px;color:var(--text);font:inherit;font-size:15px}
+.inp:focus{outline:none;border-color:var(--ember)}
+.inp::placeholder{color:#6b5a4c;letter-spacing:normal;text-transform:none}
+.join{display:flex;gap:8px;margin-top:10px}
+.join .inp{flex:1;min-width:0;text-transform:uppercase;letter-spacing:.2em}
+.join .btn{width:auto;margin:0;padding:12px 18px}
+.or{display:flex;align-items:center;gap:10px;color:#6b5a4c;font-size:12px;margin:14px 0 0;text-transform:uppercase;letter-spacing:.12em}
+.or::before,.or::after{content:'';flex:1;height:1px;background:var(--wood-edge)}
+.stats{font-size:13px;color:var(--muted);margin:16px 0 0;min-height:1em}
+.rules{text-align:left;width:min(560px,100%)}
+.rules h2{text-align:center}
+.rules h3{font-family:var(--font-display);font-size:24px;color:var(--bone);margin:18px 0 0}
+.rules ol,.rules ul{padding-left:20px;margin:12px 0;line-height:1.55}
+.rules li{margin-bottom:10px}
+.ex{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;color:var(--muted);font-size:14px}
+.ex .die{width:26px;height:26px;box-shadow:0 2px 0 var(--bone-shade)}
+.ex .die.m2{box-shadow:0 2px 0 var(--m2-shade)}
+.ex .die.m3{box-shadow:0 2px 0 var(--m3-shade)}
+.hint{font-size:13px;color:var(--muted)}
+kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;padding:1px 6px;font-size:12px}
+#resTitle.win{color:var(--m2)}
+#resTitle.lose{color:var(--blood)}
+.res-score{font-size:30px;font-weight:600;font-variant-numeric:tabular-nums;margin:6px 0 4px}
+.res-score .vs{color:var(--muted);font-weight:400;margin:0 10px}
+
+/* run screens, relic lists */
+.track{display:flex;justify-content:center;align-items:center;gap:6px;margin:4px 0 10px}
+.track span{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:13px;background:var(--slot);border:1px solid var(--slot-edge);color:var(--muted)}
+.track i{width:14px;height:1px;background:var(--wood-edge)}
+.track span.done{background:#3a2a1d;color:var(--m2);border-color:#5a4126}
+.track span.cur{background:var(--ember);color:#1b0f09;font-weight:600;border-color:var(--ember)}
+.hearts{font-size:18px;letter-spacing:3px;margin:2px 0 4px;min-height:22px}
+.rlist{text-align:left;margin:16px 0 0}
+.rrow{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid rgba(255,255,255,.05)}
+.rrow .ico{font-size:20px;width:28px;text-align:center;flex:none;line-height:1.2}
+.rrow .rn{color:var(--bone);font-weight:600;font-size:14px}
+.rrow .rd{font-size:13px;color:var(--muted);line-height:1.4}
+.rrow .rc{font-size:12px;color:var(--ember)}
+.empty{font-size:13px;color:#6b5a4c;padding:6px 0}
+.choices{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:6px}
+.choice{background:var(--slot);border:1px solid var(--wood-edge);border-radius:16px;padding:18px 12px;cursor:pointer;text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px;transition:transform .15s,border-color .15s,box-shadow .15s;animation:deal .35s ease-out backwards}
+.choice:nth-child(2){animation-delay:.08s}
+.choice:nth-child(3){animation-delay:.16s}
+.choice:hover,.choice:focus-visible{transform:translateY(-4px);border-color:var(--ember);box-shadow:0 10px 30px rgba(232,116,59,.18);outline:none}
+.choice .ico{font-size:40px;line-height:1}
+.choice .txt{display:flex;flex-direction:column;gap:6px}
+.choice .kind{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--ember)}
+.choice .nm{font-family:var(--font-display);font-size:21px;color:var(--bone);font-weight:700;line-height:1.1}
+.choice .ds{font-size:13px;color:var(--muted);line-height:1.45}
+@keyframes deal{from{opacity:0;transform:translateY(16px) scale(.96)}}
+
+/* online lobby */
+.room-code{font-size:40px;font-weight:600;letter-spacing:.3em;padding-left:.3em;color:var(--m2);margin:4px 0 6px;font-variant-numeric:tabular-nums}
+.room-code:empty{display:none}
+.share{display:flex;gap:8px;margin:6px 0 4px}
+.share .inp{flex:1;font-size:13px;padding:10px 12px;min-width:0}
+.share .btn{width:auto;margin:0;padding:10px 14px;font-size:14px;white-space:nowrap}
+.spinner{width:24px;height:24px;border:3px solid var(--wood-edge);border-top-color:var(--ember);border-radius:50%;animation:spin 1s linear infinite;margin:4px auto 10px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* mobile */
+@media (max-width:760px){
+  :root{--cell:min(62px, 17vw, 7vh)}
+  .topbar{padding:10px 16px 4px}
+  .table{grid-template-columns:1fr;grid-template-areas:"p1" "arena" "p0";gap:10px;padding:4px 16px 16px}
+  .panel{display:grid;grid-template-columns:1fr auto;grid-template-areas:"who tray" "relics tray" "abil tray";align-items:center;justify-items:start;padding:8px 14px;align-self:stretch!important;gap:6px 10px}
+  .who{grid-area:who;text-align:left;display:grid;grid-template-columns:auto auto;align-items:baseline;column-gap:14px}
+  .relics{grid-area:relics;justify-content:flex-start;max-width:none}
+  .abil{grid-area:abil;justify-content:flex-start}
+  .tray{grid-area:tray}
+  .relic{width:28px;height:28px;font-size:15px;border-radius:8px}
+  .name{font-size:21px}
+  .tag{grid-column:1;grid-row:2}
+  .total{font-size:30px;grid-row:1/3;grid-column:2;align-self:center}
+  .tray{width:calc(var(--cell)*1.05);height:calc(var(--cell)*1.05);padding:calc(var(--cell)*.12);border-radius:14px}
+  .colscores span{font-size:17px;height:22px;line-height:22px}
+  .divider{min-height:30px}
+  #status{font-size:13px}
+  .abil button{padding:5px 10px;font-size:12px}
+  .seg button{font-size:13px}
+}
+@media (max-width:560px){
+  .choices{grid-template-columns:1fr}
+  .choice{flex-direction:row;text-align:left;padding:14px;gap:14px}
+  .choice .ico{font-size:32px}
+  .card h2{font-size:34px}
+  .room-code{font-size:32px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <button class="icon-btn" id="btnMenu" type="button">☰ Меню</button>
+    <h1 class="logo">Костяшки</h1>
+    <button class="icon-btn" id="btnRules" type="button">? Правила</button>
+  </header>
+
+  <main class="table">
+    <section class="panel" id="panel1" aria-label="Соперник">
+      <div class="who">
+        <div class="name" id="name1">Соперник</div>
+        <div class="tag" id="tag1"></div>
+        <div class="total" id="total1" aria-live="polite">0</div>
+      </div>
+      <div class="relics" id="relics1"></div>
+      <div class="tray" id="tray1"></div>
+    </section>
+
+    <section class="arena">
+      <div class="board" id="board1"></div>
+      <div class="colscores" id="cs1"></div>
+      <div class="divider"><span id="status" role="status">Выберите режим, чтобы начать</span></div>
+      <div class="colscores" id="cs0"></div>
+      <div class="board" id="board0"></div>
+    </section>
+
+    <section class="panel" id="panel0" aria-label="Игрок">
+      <div class="who">
+        <div class="name" id="name0">Вы</div>
+        <div class="tag" id="tag0"></div>
+        <div class="total" id="total0" aria-live="polite">0</div>
+      </div>
+      <div class="relics" id="relics0"></div>
+      <div class="tray" id="tray0"></div>
+      <div class="abil" id="abil0"></div>
+    </section>
+  </main>
+</div>
+
+<!-- Menu -->
+<div class="overlay" id="menu">
+  <div class="card">
+    <div class="card-dice" id="menuDice"></div>
+    <h2>Костяшки</h2>
+    <p class="sub">Дуэль на кубиках у камина</p>
+    <div class="field">
+      <div class="label">Режим</div>
+      <div class="seg" data-key="mode">
+        <button type="button" data-v="run">Поход</button>
+        <button type="button" data-v="ai">Против ИИ</button>
+        <button type="button" data-v="pvp">Вдвоём</button>
+        <button type="button" data-v="online">Онлайн</button>
+      </div>
+      <p class="mode-hint" id="modeHint"></p>
+    </div>
+    <div class="field" id="levelField">
+      <div class="label">Сложность</div>
+      <div class="seg" data-key="level">
+        <button type="button" data-v="easy">Лёгкий</button>
+        <button type="button" data-v="normal">Средний</button>
+        <button type="button" data-v="hard">Сложный</button>
+      </div>
+    </div>
+    <div class="field" id="onlineField">
+      <div class="label">Ваше имя</div>
+      <input class="inp" id="inpName" maxlength="16" placeholder="Игрок" autocomplete="nickname">
+      <div class="label" style="margin-top:14px">Дары в дуэли</div>
+      <div class="seg" data-key="duelRelics">
+        <button type="button" data-v="on">2 дара каждому</button>
+        <button type="button" data-v="off">Классика</button>
+      </div>
+      <button class="btn primary" id="btnCreate" type="button">Создать комнату</button>
+      <div class="or">или</div>
+      <div class="join">
+        <input class="inp" id="inpCode" maxlength="8" placeholder="Код комнаты" autocomplete="off" autocapitalize="characters" spellcheck="false">
+        <button class="btn ghost" id="btnJoin" type="button">Войти</button>
+      </div>
+    </div>
+    <button class="btn ghost hidden" id="btnResume" type="button">Вернуться к партии</button>
+    <button class="btn ghost hidden" id="btnLeave" type="button">Покинуть дуэль</button>
+    <button class="btn primary hidden" id="btnContinueRun" type="button">Продолжить поход</button>
+    <button class="btn primary" id="btnStart" type="button">Новая игра</button>
+    <button class="btn ghost" id="btnMenuRules" type="button">Правила</button>
+    <p class="stats" id="stats"></p>
+  </div>
+</div>
+
+<!-- Rules -->
+<div class="overlay hidden" id="rules">
+  <div class="card rules">
+    <h2>Правила</h2>
+    <ol>
+      <li>У каждого игрока поле из трёх колонок по три ячейки. В свой ход вы бросаете кубик и ставите его в любую свою колонку, где есть место.</li>
+      <li>Одинаковые кубики в колонке складываются и умножаются на их количество. Разные просто складываются.
+        <div class="ex" data-dice="5,5"></div>
+        <div class="ex" data-dice="3,3,3"></div>
+        <div class="ex" data-dice="4,4,2"></div>
+      </li>
+      <li>Ставя кубик, вы <b>сжигаете</b> все кубики того же значения в колонке соперника напротив. При наведении на колонку они подсвечиваются красным, а над полем видно, сколько очков принесёт ход.</li>
+      <li>Игра заканчивается, как только у кого-то заполнены все 9 ячеек. Побеждает тот, у кого больше очков.</li>
+    </ol>
+    <h3>Поход</h3>
+    <ul>
+      <li>Пять соперников подряд, каждый сильнее предыдущего. Последний — Хозяин Костей.</li>
+      <li>В начале похода и после каждой победы выбираете один из трёх случайных <b>даров</b>.</li>
+      <li>У соперников тоже бывают дары. Нажмите на значки даров у любого игрока, чтобы прочитать, что они делают.</li>
+      <li>У вас 2 сердца. Поражение отнимает сердце, и бой можно переиграть. Ничья — переигровка без потерь.</li>
+    </ul>
+    <h3>Онлайн-дуэль</h3>
+    <ul>
+      <li>Один игрок создаёт комнату и отправляет ссылку или код. Второй открывает ссылку или вводит код в своём браузере.</li>
+      <li>В режиме «2 дара каждому» оба игрока перед партией выбирают по два дара. Дары соперника видны у его имени.</li>
+      <li>Браузеры соединяются напрямую. Иногда строгие сети (корпоративные, некоторые мобильные) не пропускают соединение — тогда попробуйте другую сеть.</li>
+    </ul>
+    <p class="hint">Клавиши <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> ставят кубик, <kbd>R</kbd> — переброс, <kbd>F</kbd> — перевёртыш.</p>
+    <button class="btn primary" id="btnRulesClose" type="button">Понятно</button>
+  </div>
+</div>
+
+<!-- Relic viewer -->
+<div class="overlay hidden" id="relicsView">
+  <div class="card">
+    <h2>Дары</h2>
+    <div class="rlist">
+      <div class="label" id="rvOppLabel">Соперник</div>
+      <div id="rvOpp"></div>
+    </div>
+    <div class="rlist">
+      <div class="label" id="rvMeLabel">Вы</div>
+      <div id="rvMe"></div>
+    </div>
+    <button class="btn primary" id="btnRvClose" type="button">Закрыть</button>
+  </div>
+</div>
+
+<!-- Run: stage intro -->
+<div class="overlay hidden" id="stage">
+  <div class="card">
+    <div class="track" id="stTrack"></div>
+    <div class="label" id="stLabel"></div>
+    <h2 id="stName"></h2>
+    <p class="sub" id="stSub"></p>
+    <div class="hearts" id="stHearts"></div>
+    <div class="rlist">
+      <div class="label">Дары соперника</div>
+      <div id="stEnemy"></div>
+    </div>
+    <div class="rlist">
+      <div class="label">Ваши дары</div>
+      <div id="stMine"></div>
+    </div>
+    <button class="btn primary" id="btnFight" type="button">В бой</button>
+    <button class="btn ghost" id="btnStageMenu" type="button">В меню</button>
+  </div>
+</div>
+
+<!-- Relic choice (run rewards and duel draft) -->
+<div class="overlay hidden" id="reward">
+  <div class="card wide">
+    <h2 id="rwTitle">Выберите дар</h2>
+    <p class="sub" id="rwSub"></p>
+    <div class="choices" id="rwChoices"></div>
+  </div>
+</div>
+
+<!-- Online lobby -->
+<div class="overlay hidden" id="lobby">
+  <div class="card">
+    <div class="label">Онлайн-дуэль</div>
+    <h2 id="lbTitle">Комната</h2>
+    <div class="room-code" id="lbCode"></div>
+    <div class="spinner" id="lbSpin"></div>
+    <p class="sub" id="lbText"></p>
+    <div id="lbShare">
+      <div class="share">
+        <input class="inp" id="lbLink" readonly aria-label="Ссылка-приглашение">
+        <button class="btn primary" id="btnCopy" type="button">Копировать</button>
+      </div>
+      <button class="btn ghost hidden" id="btnShare" type="button">Поделиться…</button>
+    </div>
+    <button class="btn ghost" id="btnLobbyCancel" type="button">Отмена</button>
+  </div>
+</div>
+
+<!-- Result -->
+<div class="overlay hidden" id="result">
+  <div class="card">
+    <h2 id="resTitle">Победа!</h2>
+    <div class="res-score" id="resScore"></div>
+    <p class="sub" id="resSub"></p>
+    <button class="btn primary" id="btnAgain" type="button">Ещё раз</button>
+    <button class="btn ghost" id="btnToMenu" type="button">В меню</button>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------- helpers ---------- */
+const $ = s => document.querySelector(s);
+const PIPS = {1:[4], 2:[2,6], 3:[2,4,6], 4:[0,2,6,8], 5:[0,2,4,6,8], 6:[0,2,3,5,6,8]};
+const LEVELS = {easy:'Лёгкий', normal:'Средний', hard:'Сложный'};
+const reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+const wait = ms => new Promise(r => setTimeout(r, reduceMotion ? Math.min(ms, 60) : ms));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function waitUntil(cond, ms = 4000){ const t0 = Date.now(); while (!cond() && Date.now() - t0 < ms) await sleep(50); return cond(); }
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+const shuffle = arr => { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const restartAnim = (el, cls) => { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
+const show = el => el.classList.remove('hidden');
+const hide = el => el.classList.add('hidden');
+const isShown = el => !el.classList.contains('hidden');
+const store = {
+  get(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+  del(k){ try { localStorage.removeItem(k); } catch (e) {} }
+};
+
+/* ---------- relics (дары) ---------- */
+const RELICS = {
+  six:      {icon:'🌞', name:'Солнечная шестёрка', desc:'Каждая 6 владельца приносит +3 очка.'},
+  low:      {icon:'🪙', name:'Медяки',             desc:'Каждая 1 и 2 владельца приносит +2 очка.'},
+  even:     {icon:'⚖️', name:'Чётный счёт',        desc:'Каждый чётный кубик владельца приносит +1 очко.'},
+  pair:     {icon:'💞', name:'Близнецы',           desc:'Каждая пара одинаковых кубиков в колонке даёт ещё +6.'},
+  crown:    {icon:'👑', name:'Корона',             desc:'Три одинаковых кубика умножаются на 4, а не на 3.'},
+  rainbow:  {icon:'🌈', name:'Радуга',             desc:'Колонка из трёх разных значений даёт +8.'},
+  center:   {icon:'🗿', name:'Опора',              desc:'Средняя колонка приносит в 1,5 раза больше очков.'},
+  armor:    {icon:'🛡️', name:'Броня',              desc:'Первое сжигание в каждой колонке владельца блокируется.'},
+  anchor:   {icon:'⚓', name:'Якорь',              desc:'Шестёрки владельца нельзя сжечь.'},
+  ember:    {icon:'🔥', name:'Угли',               desc:'+3 очка за каждый сожжённый кубик противника.'},
+  loaded:   {icon:'🎲', name:'Утяжелённая кость',  desc:'Владельцу никогда не выпадает 1.'},
+  headstart:{icon:'🏁', name:'Фора',               desc:'Партия начинается с +6 очков.'},
+  first:    {icon:'⚡', name:'Инициатива',         desc:'Владелец всегда ходит первым.'},
+  reroll:   {icon:'🔄', name:'Переброс',           desc:'Дважды за партию можно перебросить кубик.', kind:'active', charges:2},
+  flip:     {icon:'🙃', name:'Перевёртыш',         desc:'Раз за партию можно перевернуть кубик: 1↔6, 2↔5, 3↔4.', kind:'active', charges:1},
+  heart:    {icon:'❤️', name:'Запасное сердце',    desc:'+1 сердце в этом походе.', kind:'instant', runOnly:true},
+};
+const RELIC_IDS = Object.keys(RELICS);
+const KIND_LABEL = {passive:'Постоянный', active:'Умение', instant:'Сразу'};
+const AI_RELICS = RELIC_IDS.filter(id => !RELICS[id].kind);
+
+const STAGES = [
+  {name:'Пьяный бочар',       level:'easy',   relics:0},
+  {name:'Шулер Кривой Палец', level:'normal', relics:1},
+  {name:'Вдова Ворона',       level:'normal', relics:2},
+  {name:'Старый звонарь',     level:'hard',   relics:2},
+  {name:'Хозяин Костей',      level:'hard',   relics:3, boss:true},
+];
+const START_LIVES = 2;
+
+/* ---------- rules engine ---------- */
+// G = {boards:[p][col][dice], shields:[p][col]bool, bonus:[p], mods:[Set,Set]}
+function colScore(col, mods, ci){
+  const cnt = {};
+  for (const v of col) cnt[v] = (cnt[v] || 0) + 1;
+  let s = 0;
+  for (const k in cnt){
+    const v = Number(k), n = cnt[k];
+    const mult = (n === 3 && mods.has('crown')) ? 4 : n;
+    s += v * n * mult;
+    if (n === 2 && mods.has('pair')) s += 6;
+  }
+  for (const v of col){
+    if (v === 6 && mods.has('six')) s += 3;
+    if (v <= 2 && mods.has('low')) s += 2;
+    if (v % 2 === 0 && mods.has('even')) s += 1;
+  }
+  if (mods.has('rainbow') && col.length === 3 && Object.keys(cnt).length === 3) s += 8;
+  if (mods.has('center') && ci === 1) s = Math.floor(s * 1.5);
+  return s;
+}
+const boardScore = (G, p) => G.boards[p].reduce((s, col, ci) => s + colScore(col, G.mods[p], ci), 0) + G.bonus[p];
+const isFull = b => b.every(c => c.length >= 3);
+const validCols = b => [0,1,2].filter(c => b[c].length < 3);
+const rollValues = mods => mods.has('loaded') ? [2,3,4,5,6] : [1,2,3,4,5,6];
+const rollFor = p => pick(rollValues(S.G.mods[p]));
+
+function applyMove(G, p, c, v){
+  const n = {
+    boards: G.boards.map(b => b.map(col => col.slice())),
+    shields: G.shields.map(s => s.slice()),
+    bonus: G.bonus.slice(),
+    mods: G.mods
+  };
+  const q = 1 - p;
+  const res = {G: n, burned: [], blocked: false, immune: false};
+  n.boards[p][c].push(v);
+  const target = n.boards[q][c];
+  const hits = [];
+  target.forEach((x, i) => { if (x === v) hits.push(i); });
+  if (!hits.length) return res;
+  if (v === 6 && G.mods[q].has('anchor')){ res.immune = true; return res; }
+  if (n.shields[q][c]){ n.shields[q][c] = false; res.blocked = true; return res; }
+  n.boards[q][c] = target.filter(x => x !== v);
+  res.burned = hits;
+  if (G.mods[p].has('ember')) n.bonus[p] += 3 * hits.length;
+  return res;
+}
+
+/* ---------- AI ---------- */
+const diff = (G, p) => boardScore(G, p) - boardScore(G, 1 - p);
+function terminal(G, p){ const d = diff(G, p); return d > 0 ? 1000 + d : d < 0 ? -1000 + d : 0; }
+function greedyValue(G, p, c, v){
+  const n = applyMove(G, p, c, v).G;
+  return isFull(n.boards[p]) ? terminal(n, p) : diff(n, p);
+}
+// expectimax: my move, then each possible opponent roll answered by their best reply
+function lookaheadValue(G, p, c, v){
+  const n = applyMove(G, p, c, v).G;
+  if (isFull(n.boards[p])) return terminal(n, p);
+  const q = 1 - p, rolls = rollValues(G.mods[q]);
+  let total = 0;
+  for (const r of rolls){
+    let worst = Infinity;
+    for (const c2 of validCols(n.boards[q])){
+      const m = applyMove(n, q, c2, r).G;
+      const val = isFull(m.boards[q]) ? terminal(m, p) : diff(m, p);
+      if (val < worst) worst = val;
+    }
+    total += worst;
+  }
+  return total / rolls.length;
+}
+function chooseMove(G, p, v, level){
+  const cols = validCols(G.boards[p]);
+  if (level === 'easy' && Math.random() < 0.6) return pick(cols);
+  if (level === 'normal' && Math.random() < 0.12) return pick(cols);
+  const f = level === 'hard' ? lookaheadValue : greedyValue;
+  let best = -Infinity, bestCols = [];
+  for (const c of cols){
+    const val = f(G, p, c, v);
+    if (val > best + 1e-9){ best = val; bestCols = [c]; }
+    else if (Math.abs(val - best) <= 1e-9) bestCols.push(c);
+  }
+  return pick(bestCols);
+}
+
+/* ---------- state ---------- */
+const settings = Object.assign({mode:'run', level:'normal', name:'', duelRelics:'on'}, store.get('kb.settings', {}));
+const saveSettings = () => store.set('kb.settings', settings);
+const emptyG = () => ({boards:[[[],[],[]],[[],[],[]]], shields:[[false,false,false],[false,false,false]], bonus:[0,0], mods:[new Set(), new Set()]});
+const noCharges = () => ({reroll:0, flip:0});
+// S.mode is fixed for the duration of a match, so changing the menu selection mid-game can't break it.
+const S = { G: emptyG(), turn: 0, die: null, phase: 'idle', token: 0, mode: 'ai', online: false, level: 'normal', charges: [noCharges(), noCharges()] };
+let R = store.get('kb.run', null);   // run: {stage, lives, relics[], enemy[]|null, pending:null|'start'|'win', offer[]|null}
+let names = ['Вы', 'Соперник'];
+let tagBase = ['', ''];
+let shownTotals = [null, null];
+let againFn = () => newGame();
+const isHuman = p => S.mode === 'pvp' || p === 0;
+const isAI = p => (S.mode === 'ai' || S.mode === 'run') && p === 1;
+const inGame = () => ['rolling','placing','animating','waiting'].includes(S.phase);
+
+/* ---------- DOM ---------- */
+const boardEls = [$('#board0'), $('#board1')];
+const trayEls = [$('#tray0'), $('#tray1')];
+const totalEls = [$('#total0'), $('#total1')];
+const panelEls = [$('#panel0'), $('#panel1')];
+const tagEls = [$('#tag0'), $('#tag1')];
+const relicEls = [$('#relics0'), $('#relics1')];
+const abilEl = $('#abil0');
+const abilBtns = {};
+const csEls = [[], []];
+const colEls = [[], []];
+const cellEls = [[], []]; // [player][column][index from the centre line]
+const statusEl = $('#status');
+const menuEl = $('#menu'), rulesEl = $('#rules'), resultEl = $('#result'), stageEl = $('#stage'),
+      rewardEl = $('#reward'), lobbyEl = $('#lobby'), rvEl = $('#relicsView');
+const overlays = [menuEl, rulesEl, resultEl, stageEl, rewardEl, lobbyEl, rvEl];
+const hideOverlays = () => overlays.forEach(hide);
+
+function makeDie(v){
+  const d = document.createElement('div');
+  d.className = 'die';
+  const f = document.createElement('div');
+  f.className = 'face';
+  for (let i = 0; i < 9; i++){ const s = document.createElement('span'); s.className = 'pip'; f.appendChild(s); }
+  d.appendChild(f);
+  setFace(d, v);
+  return d;
+}
+function setFace(d, v){
+  d.dataset.v = v;
+  d.setAttribute('aria-label', 'Кубик ' + v);
+  const on = PIPS[v];
+  Array.from(d.firstChild.children).forEach((s, i) => s.classList.toggle('on', on.includes(i)));
+}
+
+function buildBoards(){
+  for (const p of [0, 1]){
+    boardEls[p].innerHTML = '';
+    const cs = p === 0 ? $('#cs0') : $('#cs1');
+    cs.innerHTML = '';
+    for (let c = 0; c < 3; c++){
+      const col = document.createElement('button');
+      col.type = 'button';
+      col.className = 'col';
+      const cells = [];
+      for (let r = 0; r < 3; r++){ const cell = document.createElement('div'); cell.className = 'cell'; col.appendChild(cell); cells.push(cell); }
+      // Dice stack from the centre line outwards: bottom board fills top-down, top board bottom-up.
+      cellEls[p][c] = p === 0 ? cells : cells.slice().reverse();
+      col.addEventListener('click', () => onColumn(p, c));
+      col.addEventListener('mouseenter', () => preview(p, c));
+      col.addEventListener('focus', () => preview(p, c));
+      col.addEventListener('mouseleave', leavePreview);
+      col.addEventListener('blur', leavePreview);
+      colEls[p][c] = col;
+      boardEls[p].appendChild(col);
+      const sc = document.createElement('span');
+      csEls[p][c] = sc;
+      cs.appendChild(sc);
+    }
+  }
+}
+
+const canAct = p => S.phase === 'placing' && p === S.turn && isHuman(p);
+const hasCharge = (p, k) => S.phase === 'placing' && S.turn === p && S.charges[p][k] > 0;
+
+function render(fresh){
+  const G = S.G;
+  for (const p of [0, 1]){
+    const active = canAct(p);
+    boardEls[p].classList.toggle('active', active);
+    panelEls[p].classList.toggle('turn', inGame() && p === S.turn);
+    for (let c = 0; c < 3; c++){
+      const col = G.boards[p][c];
+      const cnt = {};
+      col.forEach(v => cnt[v] = (cnt[v] || 0) + 1);
+      for (let i = 0; i < 3; i++){
+        const cell = cellEls[p][c][i];
+        cell.innerHTML = '';
+        if (i < col.length){
+          const v = col[i];
+          const d = makeDie(v);
+          if (cnt[v] === 2) d.classList.add('m2');
+          if (cnt[v] === 3) d.classList.add('m3');
+          if (fresh && fresh.p === p && fresh.c === c && fresh.i === i) d.classList.add('drop');
+          cell.appendChild(d);
+        }
+      }
+      const full = col.length >= 3;
+      const sc = colScore(col, G.mods[p], c);
+      colEls[p][c].classList.toggle('full', full);
+      colEls[p][c].classList.toggle('shielded', !!G.shields[p][c]);
+      colEls[p][c].disabled = !(active && !full);
+      colEls[p][c].setAttribute('aria-label', `${names[p]}: колонка ${c + 1}, очков ${sc}${G.shields[p][c] ? ', под бронёй' : ''}`);
+      csEls[p][c].textContent = sc;
+      csEls[p][c].classList.toggle('zero', sc === 0);
+    }
+    const bonus = G.bonus[p];
+    tagEls[p].textContent = [tagBase[p], bonus ? `бонус +${bonus}` : ''].filter(Boolean).join(' · ');
+  }
+  if (abilBtns.reroll){ abilBtns.reroll.disabled = !(canAct(0) && hasCharge(0, 'reroll')); abilBtns.reroll.textContent = `🔄 Переброс · ${S.charges[0].reroll}`; }
+  if (abilBtns.flip){ abilBtns.flip.disabled = !(canAct(0) && hasCharge(0, 'flip')); abilBtns.flip.textContent = `🙃 Перевернуть · ${S.charges[0].flip}`; }
+  updateTotals();
+}
+
+function updateTotals(){
+  for (const p of [0, 1]){
+    const t = boardScore(S.G, p);
+    if (shownTotals[p] === t) continue;
+    const el = totalEls[p];
+    el.textContent = t;
+    if (shownTotals[p] !== null) restartAnim(el, 'bump');
+    shownTotals[p] = t;
+  }
+}
+
+function renderRelics(){
+  for (const p of [0, 1]){
+    relicEls[p].innerHTML = '';
+    if (!S.G.mods[p].size) continue;
+    for (const id of S.G.mods[p]){
+      const r = RELICS[id];
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'relic';
+      b.textContent = r.icon;
+      b.title = `${r.name}: ${r.desc}`;
+      b.setAttribute('aria-label', b.title);
+      b.addEventListener('click', openRelicsView);
+      relicEls[p].appendChild(b);
+    }
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'relic-more';
+    more.textContent = p === 0 ? 'мои дары' : 'дары соперника';
+    more.addEventListener('click', openRelicsView);
+    relicEls[p].appendChild(more);
+  }
+  abilEl.innerHTML = '';
+  delete abilBtns.reroll; delete abilBtns.flip;
+  if (S.G.mods[0].has('reroll')){
+    abilBtns.reroll = document.createElement('button');
+    abilBtns.reroll.type = 'button';
+    abilBtns.reroll.title = 'Перебросить кубик (R)';
+    abilBtns.reroll.addEventListener('click', useReroll);
+    abilEl.appendChild(abilBtns.reroll);
+  }
+  if (S.G.mods[0].has('flip')){
+    abilBtns.flip = document.createElement('button');
+    abilBtns.flip.type = 'button';
+    abilBtns.flip.title = 'Перевернуть кубик (F)';
+    abilBtns.flip.addEventListener('click', useFlip);
+    abilEl.appendChild(abilBtns.flip);
+  }
+}
+
+function relicRows(ids, el, emptyText, chargesOf){
+  el.innerHTML = '';
+  if (!ids.length){
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = emptyText;
+    el.appendChild(e);
+    return;
+  }
+  for (const id of ids){
+    const r = RELICS[id];
+    const row = document.createElement('div');
+    row.className = 'rrow';
+    row.innerHTML = '<span class="ico"></span><div><div class="rn"></div><div class="rd"></div><div class="rc"></div></div>';
+    row.querySelector('.ico').textContent = r.icon;
+    row.querySelector('.rn').textContent = r.name;
+    row.querySelector('.rd').textContent = r.desc;
+    const left = chargesOf && chargesOf(id);
+    if (left != null) row.querySelector('.rc').textContent = `Осталось в этой партии: ${left}`;
+    el.appendChild(row);
+  }
+}
+
+function openRelicsView(){
+  const charges = p => id => RELICS[id].kind === 'active' && inGame() ? S.charges[p][id] : null;
+  $('#rvOppLabel').textContent = `Дары: ${names[1]}`;
+  $('#rvMeLabel').textContent = S.mode === 'pvp' ? `Дары: ${names[0]}` : 'Ваши дары';
+  relicRows([...S.G.mods[1]], $('#rvOpp'), 'Нет даров', charges(1));
+  relicRows([...S.G.mods[0]], $('#rvMe'), 'Нет даров', charges(0));
+  show(rvEl);
+  $('#btnRvClose').focus();
+}
+
+function setStatus(text, hot){
+  statusEl.textContent = text;
+  statusEl.classList.toggle('hot', !!hot);
+}
+
+/* hover preview: ghost die, threatened enemy dice, score delta */
+function preview(p, c){
+  clearPreview();
+  if (!canAct(p)) return;
+  const col = S.G.boards[p][c];
+  if (col.length >= 3) return;
+  const q = 1 - p;
+  const g = makeDie(S.die);
+  g.classList.add('ghost');
+  cellEls[p][c][col.length].appendChild(g);
+  const res = applyMove(S.G, p, c, S.die);
+  res.burned.forEach(i => { const d = cellEls[q][c][i].firstChild; if (d) d.classList.add('threat'); });
+  const gain = boardScore(res.G, p) - boardScore(S.G, p);
+  const lost = boardScore(S.G, q) - boardScore(res.G, q);
+  let t = `Колонка ${c + 1}: +${gain}`;
+  if (lost > 0) t += ` · ${names[q]} −${lost}`;
+  if (res.blocked) t += ' · удар примет броня';
+  if (res.immune) t += ' · якорь защитит';
+  setStatus(t, true);
+}
+function clearPreview(){
+  document.querySelectorAll('.die.ghost').forEach(d => d.remove());
+  document.querySelectorAll('.die.threat').forEach(d => d.classList.remove('threat'));
+}
+function leavePreview(){
+  clearPreview();
+  if (canAct(S.turn)) setStatus(turnPrompt(S.turn), true);
+}
+
+/* ---------- game flow ---------- */
+// AI waits while the player is reading a menu / rules / relic list
+const paused = () => [menuEl, rulesEl, stageEl, rewardEl, rvEl].some(isShown);
+
+function turnPrompt(p){
+  if (S.mode === 'pvp') return `Ход: ${names[p]} — выберите колонку`;
+  return 'Ваш ход — выберите колонку';
+}
+
+async function startTurn(){
+  // In online duels the host is the only one who rolls; the guest waits for the 'roll' message.
+  if (S.online && !NET.host) return;
+  const p = S.turn, v = rollFor(p);
+  if (S.online) netSend({t:'roll', p: toNet(p), v});
+  await animateRoll(p, v, S.token);
+}
+
+async function animateRoll(p, v, tok){
+  S.turn = p;
+  S.phase = 'rolling';
+  S.die = null;
+  render();
+  setStatus(isHuman(p) && S.mode !== 'pvp' ? 'Бросок…' : `${names[p]} бросает…`);
+  trayEls[1 - p].innerHTML = '';
+  const tray = trayEls[p];
+  tray.innerHTML = '';
+  const d = makeDie(1 + Math.floor(Math.random() * 6));
+  d.classList.add('rolling');
+  tray.appendChild(d);
+  for (let i = 0; i < 9; i++){
+    await wait(60);
+    if (tok !== S.token) return;
+    setFace(d, 1 + Math.floor(Math.random() * 6));
+  }
+  setFace(d, v);
+  d.classList.remove('rolling');
+  d.classList.add('landed');
+  S.die = v;
+  S.phase = 'placing';
+  render();
+  if (isHuman(p)){ setStatus(turnPrompt(p), true); return; }
+  if (!isAI(p)){ setStatus(`${names[p]} выбирает колонку…`); return; }
+
+  setStatus(`${names[p]} думает…`);
+  await wait(550 + Math.random() * 350);
+  while (paused()){ await sleep(150); if (tok !== S.token) return; }
+  if (tok !== S.token) return;
+  place(p, chooseMove(S.G, p, v, S.level));
+}
+
+function onColumn(p, c){
+  if (!canAct(p) || S.G.boards[p][c].length >= 3) return;
+  if (S.online){
+    if (NET.host){ netSend({t:'place', p: toNet(p), c}); place(p, c); }
+    else {
+      netSend({t:'move', c});
+      S.phase = 'waiting';
+      clearPreview();
+      render();
+      setStatus('Ход отправлен…');
+    }
+    return;
+  }
+  place(p, c);
+}
+
+function useReroll(){
+  if (!canAct(0) || !hasCharge(0, 'reroll')) return;
+  if (S.online && !NET.host){ netSend({t:'ability', k:'reroll'}); S.phase = 'waiting'; clearPreview(); render(); setStatus('🔄 Переброс…', true); return; }
+  const v = rollFor(0);
+  if (S.online) netSend({t:'reroll', p: toNet(0), v});
+  doReroll(0, v);
+}
+function useFlip(){
+  if (!canAct(0) || !hasCharge(0, 'flip')) return;
+  if (S.online && !NET.host){ netSend({t:'ability', k:'flip'}); S.phase = 'waiting'; clearPreview(); render(); return; }
+  if (S.online) netSend({t:'flip', p: toNet(0)});
+  doFlip(0);
+}
+
+async function doReroll(p, v){
+  const tok = S.token;
+  S.charges[p].reroll = Math.max(0, S.charges[p].reroll - 1);
+  clearPreview();
+  S.phase = 'rolling';
+  render();
+  let d = trayEls[p].firstChild;
+  if (!d){ d = makeDie(v); trayEls[p].appendChild(d); }
+  d.classList.remove('landed');
+  d.classList.add('rolling');
+  setStatus(p === 0 && S.mode !== 'pvp' ? '🔄 Переброс…' : `🔄 ${names[p]} перебрасывает…`, true);
+  for (let i = 0; i < 7; i++){
+    await wait(60);
+    if (tok !== S.token) return;
+    setFace(d, 1 + Math.floor(Math.random() * 6));
+  }
+  setFace(d, v);
+  d.classList.remove('rolling');
+  restartAnim(d, 'landed');
+  S.die = v;
+  S.phase = 'placing';
+  render();
+  setStatus(isHuman(p) ? `🔄 Выпало ${v} — выберите колонку` : `🔄 ${names[p]} перебросил: ${v}`, true);
+}
+
+function doFlip(p){
+  S.charges[p].flip = Math.max(0, S.charges[p].flip - 1);
+  clearPreview();
+  const from = S.die;
+  S.die = 7 - from;
+  const d = trayEls[p].firstChild;
+  if (d){ setFace(d, S.die); restartAnim(d, 'landed'); }
+  S.phase = 'placing';
+  render();
+  setStatus(isHuman(p) ? `🙃 ${from} → ${S.die} — выберите колонку` : `🙃 ${names[p]} перевернул: ${from} → ${S.die}`, true);
+}
+
+async function place(p, c){
+  if (!['placing','waiting'].includes(S.phase) || p !== S.turn || !Number.isInteger(c) || c < 0 || c > 2 || S.G.boards[p][c].length >= 3) return;
+  const tok = S.token, v = S.die, q = 1 - p;
+  S.phase = 'animating';
+  clearPreview();
+  trayEls[p].innerHTML = '';
+  const res = applyMove(S.G, p, c, v);
+  // show the placed die first, then resolve its effect on the opponent
+  S.G.boards[p][c].push(v);
+  render({p, c, i: S.G.boards[p][c].length - 1});
+
+  if (res.burned.length){
+    await wait(240);
+    if (tok !== S.token) return;
+    res.burned.forEach(i => { const d = cellEls[q][c][i].firstChild; if (d) d.classList.add('burn'); });
+    const lost = boardScore(S.G, q) - boardScore(res.G, q);
+    const ember = res.G.bonus[p] - S.G.bonus[p];
+    setStatus(`Сожжено: ${res.burned.length} × ${v} (−${lost})${ember ? ` · 🔥 +${ember}` : ''}`, true);
+    await wait(560);
+    if (tok !== S.token) return;
+    S.G = res.G;
+    render();
+    await wait(250);
+  } else if (res.blocked){
+    await wait(240);
+    if (tok !== S.token) return;
+    restartAnim(colEls[q][c], 'shatter');
+    setStatus('🛡️ Броня поглотила удар', true);
+    S.G = res.G;
+    render();
+    await wait(650);
+  } else if (res.immune){
+    await wait(240);
+    if (tok !== S.token) return;
+    setStatus('⚓ Якорь: шестёрки не горят', true);
+    S.G = res.G;
+    render();
+    await wait(650);
+  } else {
+    S.G = res.G;
+    await wait(260);
+  }
+  if (tok !== S.token) return;
+
+  if (isFull(S.G.boards[p])) return endGame();
+  S.turn = q;
+  startTurn();
+}
+
+function setResult(title, cls, sub, againLabel, fn){
+  const titleEl = $('#resTitle');
+  titleEl.className = cls || '';
+  titleEl.textContent = title;
+  $('#resSub').textContent = sub;
+  const again = $('#btnAgain');
+  again.textContent = againLabel;
+  again.disabled = false;
+  againFn = fn;
+}
+
+async function endGame(){
+  const tok = S.token;
+  S.phase = 'over';
+  render();
+  setStatus('Партия окончена', true);
+  const s0 = boardScore(S.G, 0), s1 = boardScore(S.G, 1);
+  $('#resScore').innerHTML = `${s0}<span class="vs">:</span>${s1}`;
+
+  if (S.mode === 'run') endRunMatch(s0, s1);
+  else if (S.mode === 'online'){
+    const sub = `Онлайн-дуэль · ${names[1]}`;
+    if (s0 > s1) setResult('Победа!', 'win', sub, 'Реванш', requestRematch);
+    else if (s0 < s1) setResult('Поражение', 'lose', sub, 'Реванш', requestRematch);
+    else setResult('Ничья', '', sub, 'Реванш', requestRematch);
+  } else if (S.mode === 'ai'){
+    const stats = store.get('kb.stats', {});
+    const st = stats[S.level] || {w:0, l:0, d:0};
+    const sub = `Сложность: ${LEVELS[S.level]}`;
+    if (s0 > s1){ st.w++; setResult('Победа!', 'win', sub, 'Ещё раз', newGame); }
+    else if (s0 < s1){ st.l++; setResult('Поражение', 'lose', sub, 'Ещё раз', newGame); }
+    else { st.d++; setResult('Ничья', '', sub, 'Ещё раз', newGame); }
+    stats[S.level] = st;
+    store.set('kb.stats', stats);
+  } else {
+    if (s0 === s1) setResult('Ничья', '', 'Игра вдвоём', 'Ещё раз', newGame);
+    else setResult(`Победил ${s0 > s1 ? names[0] : names[1]}`, 'win', 'Игра вдвоём', 'Ещё раз', newGame);
+  }
+  await wait(900);
+  if (tok !== S.token) return;
+  show(resultEl);
+  $('#btnAgain').focus();
+}
+
+function firstPlayer(mods){
+  const f0 = mods[0].has('first'), f1 = mods[1].has('first');
+  if (f0 && !f1) return {turn: 0, forced: true};
+  if (f1 && !f0) return {turn: 1, forced: true};
+  return {turn: Math.random() < 0.5 ? 0 : 1, forced: false};
+}
+
+// cfg: {mode, mods:[Set,Set], names, tags, level, first:{turn, forced}}
+async function initMatch(cfg){
+  S.token++;
+  const tok = S.token;
+  S.mode = cfg.mode;
+  S.online = cfg.mode === 'online';
+  S.level = cfg.level || 'normal';
+  names = cfg.names;
+  tagBase = cfg.tags;
+  const mods = cfg.mods;
+  S.G = {
+    boards: [[[],[],[]],[[],[],[]]],
+    shields: [0, 1].map(p => [0, 1, 2].map(() => mods[p].has('armor'))),
+    bonus: [0, 1].map(p => mods[p].has('headstart') ? 6 : 0),
+    mods
+  };
+  S.charges = [0, 1].map(p => ({reroll: mods[p].has('reroll') ? 2 : 0, flip: mods[p].has('flip') ? 1 : 0}));
+  S.die = null;
+  S.phase = 'idle';
+  shownTotals = [null, null];
+  $('#name0').textContent = names[0];
+  $('#name1').textContent = names[1];
+  trayEls.forEach(t => t.innerHTML = '');
+  hideOverlays();
+  renderRelics();
+  S.turn = cfg.first.turn;
+  render();
+  const t = S.turn;
+  let text;
+  if (S.mode === 'pvp') text = `Жребий: первым ходит ${names[t]}`;
+  else if (t === 0) text = cfg.first.forced ? '⚡ Инициатива: вы ходите первым' : 'Жребий: вы ходите первым';
+  else text = cfg.first.forced ? `⚡ Первым ходит ${names[1]}` : `Жребий: первым ходит ${names[1]}`;
+  setStatus(text, true);
+  await wait(1000);
+  if (tok !== S.token) return;
+  startTurn();
+}
+
+function newGame(){
+  leaveOnline();
+  const mode = settings.mode === 'online' ? 'ai' : settings.mode;
+  let cfg;
+  if (mode === 'run'){
+    if (!R){ showMenu(); return; }
+    const st = STAGES[R.stage];
+    const mods = [new Set(R.relics), new Set(R.enemy || [])];
+    cfg = {mode, mods, level: st.level, names: ['Вы', st.name],
+      tags: ['❤️'.repeat(R.lives), `${st.boss ? 'Босс' : 'Этап ' + (R.stage + 1) + '/' + STAGES.length} · ${LEVELS[st.level]}`]};
+  } else if (mode === 'pvp'){
+    cfg = {mode, mods: [new Set(), new Set()], names: ['Игрок 1', 'Игрок 2'], tags: ['снизу', 'сверху']};
+  } else {
+    cfg = {mode, mods: [new Set(), new Set()], level: settings.level, names: ['Вы', 'Соперник'], tags: ['', 'ИИ · ' + LEVELS[settings.level]]};
+  }
+  cfg.first = firstPlayer(cfg.mods);
+  initMatch(cfg);
+}
+
+function resetTable(text){
+  S.token++;
+  S.phase = 'idle';
+  S.G = emptyG();
+  S.charges = [noCharges(), noCharges()];
+  trayEls.forEach(t => t.innerHTML = '');
+  renderRelics();
+  render();
+  setStatus(text || 'Выберите режим, чтобы начать');
+}
+
+/* ---------- choice overlay (run rewards, duel draft) ---------- */
+function showChoices({title, sub, ids, onPick}){
+  hideOverlays();
+  $('#rwTitle').textContent = title;
+  $('#rwSub').textContent = sub;
+  const box = $('#rwChoices');
+  box.innerHTML = '';
+  for (const id of ids){
+    const r = RELICS[id];
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'choice';
+    b.innerHTML = '<span class="ico"></span><span class="txt"><span class="kind"></span><span class="nm"></span><span class="ds"></span></span>';
+    b.querySelector('.ico').textContent = r.icon;
+    b.querySelector('.kind').textContent = KIND_LABEL[r.kind || 'passive'];
+    b.querySelector('.nm').textContent = r.name;
+    b.querySelector('.ds').textContent = r.desc;
+    b.addEventListener('click', () => onPick(id), {once: true});
+    box.appendChild(b);
+  }
+  show(rewardEl);
+  box.firstChild.focus();
+}
+
+/* ---------- run (поход) ---------- */
+const saveRun = () => store.set('kb.run', R);
+function clearRun(){ R = null; store.del('kb.run'); }
+function recordBest(cleared, finished){
+  const b = store.get('kb.runBest', {best:0, clears:0});
+  b.best = Math.max(b.best, cleared);
+  if (finished) b.clears++;
+  store.set('kb.runBest', b);
+}
+
+function startRun(){
+  leaveOnline();
+  resetTable('Поход начинается…');
+  R = {stage:0, lives:START_LIVES, relics:[], enemy:null, pending:'start', offer:null};
+  saveRun();
+  showReward();
+}
+function continueRun(){
+  if (!R) return;
+  leaveOnline();
+  if (R.pending) showReward(); else enterStage();
+}
+
+function rollEnemy(){
+  const st = STAGES[R.stage];
+  const picks = st.boss ? ['armor'] : [];
+  for (const id of shuffle(AI_RELICS)){ if (picks.length >= st.relics) break; if (!picks.includes(id)) picks.push(id); }
+  return picks;
+}
+
+function renderTrack(el){
+  el.innerHTML = '';
+  STAGES.forEach((st, i) => {
+    if (i) el.appendChild(document.createElement('i'));
+    const s = document.createElement('span');
+    s.textContent = i < R.stage ? '✓' : st.boss ? '☠' : String(i + 1);
+    if (i < R.stage) s.className = 'done';
+    if (i === R.stage) s.className = 'cur';
+    s.title = st.name;
+    el.appendChild(s);
+  });
+}
+
+function enterStage(){
+  if (!R.enemy){ R.enemy = rollEnemy(); saveRun(); }
+  const st = STAGES[R.stage];
+  hideOverlays();
+  renderTrack($('#stTrack'));
+  $('#stLabel').textContent = st.boss ? 'Финальный бой' : `Этап ${R.stage + 1} из ${STAGES.length}`;
+  $('#stName').textContent = st.name;
+  $('#stSub').textContent = `Сложность: ${LEVELS[st.level]}`;
+  $('#stHearts').textContent = '❤️'.repeat(R.lives);
+  $('#stHearts').title = `Сердец: ${R.lives}`;
+  relicRows(R.enemy, $('#stEnemy'), 'Нет — играет честно');
+  relicRows(R.relics, $('#stMine'), 'Пока нет');
+  show(stageEl);
+  $('#btnFight').focus();
+}
+
+function showReward(){
+  if (!R.offer){
+    const pool = RELIC_IDS.filter(id => id === 'heart' || !R.relics.includes(id));
+    R.offer = shuffle(pool).slice(0, 3);
+    saveRun();
+  }
+  const start = R.pending === 'start';
+  showChoices({
+    title: start ? 'Стартовый дар' : 'Выберите дар',
+    sub: start ? 'Он останется с вами на весь поход' : `Дальше: ${STAGES[R.stage].name}${STAGES[R.stage].boss ? ' (босс)' : ''}`,
+    ids: R.offer,
+    onPick: takeRelic
+  });
+}
+
+function takeRelic(id){
+  if (id === 'heart') R.lives++;
+  else R.relics.push(id);
+  R.pending = null;
+  R.offer = null;
+  saveRun();
+  enterStage();
+}
+
+function endRunMatch(s0, s1){
+  const st = STAGES[R.stage];
+  if (s0 > s1){
+    if (R.stage === STAGES.length - 1){
+      recordBest(STAGES.length, true);
+      clearRun();
+      setResult('Поход пройден!', 'win', 'Хозяин Костей побеждён. Таверна ваша.', 'Новый поход', startRun);
+    } else {
+      R.stage++;
+      R.enemy = null;
+      R.pending = 'win';
+      R.offer = null;
+      saveRun();
+      recordBest(R.stage, false);
+      setResult('Победа!', 'win', `Этап ${R.stage} из ${STAGES.length} пройден: ${st.name}`, 'Выбрать дар', showReward);
+    }
+  } else if (s0 === s1){
+    setResult('Ничья', '', 'Бой переигрывается, сердце не потеряно', 'Переиграть', newGame);
+  } else {
+    R.lives--;
+    if (R.lives > 0){
+      saveRun();
+      setResult('Поражение', 'lose', `Осталось сердец: ${'❤️'.repeat(R.lives)}`, 'Реванш', newGame);
+    } else {
+      const cleared = R.stage;
+      recordBest(cleared, false);
+      clearRun();
+      setResult('Поход окончен', 'lose', `Пройдено этапов: ${cleared} из ${STAGES.length}`, 'Новый поход', startRun);
+    }
+  }
+}
+
+/* ---------- online duel (PeerJS, host-authoritative) ----------
+   The host rolls every die and validates the guest's moves; both browsers run the same engine.
+   Player indices in messages are from the host's point of view: host = 0, guest = 1.
+   Each browser draws itself at the bottom (local index 0). */
+const PROTO = 1;
+const ROOM_PREFIX = 'kostyashki-duel-';
+const CODE_ABC = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const DRAFT_ROUNDS = 2;
+const NET = {
+  peer: null, conn: null, host: false, active: false, code: '', relics: true, oppName: 'Соперник',
+  picks: {me: null, opp: null}, rematch: {me: false, opp: false}, started: false,
+  queue: Promise.resolve(), lastSeen: 0, joinTimer: null
+};
+const toNet = p => NET.host ? p : 1 - p;
+const toLocal = toNet;
+const myName = () => (settings.name || '').trim().slice(0, 16) || 'Игрок';
+const cleanName = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 16) || 'Соперник';
+const cleanIds = ids => Array.isArray(ids) ? ids.filter(id => typeof id === 'string' && RELICS[id] && !RELICS[id].runOnly).slice(0, DRAFT_ROUNDS) : [];
+const cleanDie = v => (Number.isInteger(v) && v >= 1 && v <= 6) ? v : 1;
+const genCode = () => Array.from({length: 5}, () => CODE_ABC[Math.floor(Math.random() * CODE_ABC.length)]).join('');
+const roomLink = code => `${location.origin}${location.pathname}?room=${code}`;
+
+function netSend(m){ try { if (NET.conn && NET.conn.open) NET.conn.send(m); } catch (e) {} }
+function netClose(){
+  const {conn, peer} = NET;
+  NET.conn = null; NET.peer = null; NET.active = false; NET.started = false;
+  clearTimeout(NET.joinTimer);
+  try { conn && conn.close(); } catch (e) {}
+  try { peer && peer.destroy(); } catch (e) {}
+}
+function leaveOnline(){
+  if (NET.active) netSend({t:'leave'});
+  const wasOnline = S.online;
+  netClose();
+  if (wasOnline){ S.online = false; resetTable(); }
+}
+
+function showLobby({title, code = '', text = '', share = false, spin = true, cancel = 'Отмена'}){
+  hideOverlays();
+  $('#lbTitle').textContent = title;
+  $('#lbCode').textContent = code;
+  $('#lbText').textContent = text;
+  $('#lbSpin').classList.toggle('hidden-el', !spin);
+  $('#lbShare').classList.toggle('hidden-el', !share);
+  if (share){
+    $('#lbLink').value = roomLink(code);
+    $('#btnShare').classList.toggle('hidden', !navigator.share);
+  }
+  $('#btnLobbyCancel').textContent = cancel;
+  show(lobbyEl);
+}
+
+function netFail(text){
+  netClose();
+  if (S.online){ S.online = false; resetTable('Связь потеряна'); }
+  showLobby({title: 'Не получилось', text, spin: false, cancel: 'В меню'});
+}
+
+function peerErrorText(err){
+  switch (err && err.type){
+    case 'peer-unavailable': return 'Комната не найдена. Проверьте код или попросите друга создать новую.';
+    case 'browser-incompatible': return 'Этот браузер не поддерживает прямое соединение (WebRTC).';
+    case 'network': case 'server-error': case 'socket-error': case 'socket-closed':
+      return 'Нет связи с сервером подключений. Проверьте интернет и попробуйте ещё раз.';
+    default: return 'Ошибка соединения' + (err && err.type ? ` (${err.type})` : '') + '. Попробуйте ещё раз.';
+  }
+}
+
+async function peerReady(){
+  if (typeof window.Peer === 'function') return true;
+  showLobby({title: 'Подготовка', text: 'Загружаем сетевой модуль…'});
+  if (await waitUntil(() => typeof window.Peer === 'function', 10000)) return true;
+  showLobby({title: 'Не получилось', text: 'Сетевой модуль не загрузился. Онлайн-дуэль требует интернет — обновите страницу.', spin: false, cancel: 'В меню'});
+  return false;
+}
+
+async function createRoom(){
+  leaveOnline();
+  resetTable('Онлайн-дуэль');
+  if (!(await peerReady())) return;
+  NET.host = true;
+  NET.relics = settings.duelRelics !== 'off';
+  NET.code = genCode();
+  showLobby({title: 'Комната создана', code: NET.code, text: 'Подключаемся к сети…', share: true});
+  const peer = new Peer(ROOM_PREFIX + NET.code);
+  NET.peer = peer;
+  peer.on('open', () => {
+    if (peer !== NET.peer) return;
+    $('#lbText').textContent = 'Отправьте ссылку или код другу. Ждём соперника…';
+  });
+  peer.on('connection', conn => {
+    if (peer !== NET.peer) return;
+    if (NET.conn && NET.active){ conn.on('open', () => { try { conn.send({t:'busy'}); } catch (e) {} setTimeout(() => conn.close(), 500); }); return; }
+    if (NET.conn){ const stale = NET.conn; NET.conn = null; try { stale.close(); } catch (e) {} } // earlier attempt that never opened
+    attachConn(conn);
+  });
+  peer.on('disconnected', () => { if (peer === NET.peer && !NET.conn) try { peer.reconnect(); } catch (e) {} });
+  peer.on('error', err => {
+    if (peer !== NET.peer) return;
+    if (err.type === 'unavailable-id'){ netClose(); createRoom(); return; }
+    if (NET.active && (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error')) return; // signalling lost, data channel may still be fine
+    netFail(peerErrorText(err));
+  });
+}
+
+async function joinRoom(raw){
+  const code = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length < 4){ $('#inpCode').focus(); return; }
+  leaveOnline();
+  resetTable('Онлайн-дуэль');
+  if (!(await peerReady())) return;
+  NET.host = false;
+  NET.code = code;
+  showLobby({title: 'Подключение', code, text: 'Ищем комнату…'});
+  const peer = new Peer();
+  NET.peer = peer;
+  peer.on('open', () => {
+    if (peer !== NET.peer) return;
+    attachConn(peer.connect(ROOM_PREFIX + code, {reliable: true}));
+  });
+  peer.on('error', err => {
+    if (peer !== NET.peer) return;
+    if (NET.active && (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error')) return;
+    netFail(peerErrorText(err));
+  });
+  NET.joinTimer = setTimeout(() => {
+    if (peer === NET.peer && !NET.active) netFail('Не удалось подключиться за 20 секунд. Проверьте код или попробуйте другую сеть.');
+  }, 20000);
+}
+
+function attachConn(conn){
+  NET.conn = conn;
+  conn.on('open', () => {
+    if (conn !== NET.conn) return;
+    NET.active = true;
+    NET.lastSeen = Date.now();
+    clearTimeout(NET.joinTimer);
+    if (NET.host) $('#lbText').textContent = 'Соперник подключается…';
+    else { $('#lbText').textContent = 'Соединились! Ждём хозяина комнаты…'; netSend({t:'hello', v: PROTO, name: myName()}); }
+  });
+  conn.on('data', m => {
+    if (conn !== NET.conn) return;
+    NET.lastSeen = Date.now();
+    if (!m || typeof m !== 'object' || typeof m.t !== 'string') return;
+    NET.queue = NET.queue.then(() => handleNet(m)).catch(e => console.error(e));
+  });
+  conn.on('close', () => {
+    if (conn !== NET.conn) return;
+    if (!NET.active && NET.host){ NET.conn = null; return; } // a guest gave up before connecting: keep waiting
+    onNetLost('Соперник отключился.');
+  });
+  conn.on('error', () => {
+    if (conn !== NET.conn) return;
+    if (NET.active) onNetLost('Соединение прервалось.');
+    else if (!NET.host) netFail('Не удалось установить прямое соединение. Возможно, сеть блокирует WebRTC — попробуйте другую сеть (например, мобильный интернет).');
+    else NET.conn = null; // host: keep the room open for the next attempt
+  });
+}
+
+function onNetLost(text){
+  if (!NET.conn) return;
+  const wasActive = NET.active;
+  netClose();
+  S.token++;
+  if (S.online){ S.online = false; S.phase = 'over'; render(); setStatus('Связь потеряна'); }
+  showLobby({title: wasActive ? 'Дуэль прервана' : 'Не получилось', text, spin: false, cancel: 'В меню'});
+}
+
+// heartbeat: notices a silently dropped connection
+setInterval(() => {
+  if (!NET.active) return;
+  netSend({t:'ping'});
+  if (Date.now() - NET.lastSeen > 40000) onNetLost('Соединение прервалось.');
+}, 3000);
+window.addEventListener('beforeunload', () => { if (NET.active) netSend({t:'leave'}); });
+
+async function handleNet(m){
+  switch (m.t){
+    case 'hello':
+      if (!NET.host) return;
+      if (m.v !== PROTO){ netSend({t:'error', text:'У вас разные версии игры. Обновите страницу.'}); return; }
+      NET.oppName = cleanName(m.name);
+      netSend({t:'setup', v: PROTO, relics: NET.relics, name: myName()});
+      beginDuel();
+      return;
+    case 'setup':
+      if (NET.host) return;
+      if (m.v !== PROTO){ netFail('У вас разные версии игры. Обновите страницу.'); return; }
+      NET.relics = !!m.relics;
+      NET.oppName = cleanName(m.name);
+      beginDuel();
+      return;
+    case 'picks':
+      NET.picks.opp = cleanIds(m.ids);
+      await checkReady();
+      return;
+    case 'start':
+      if (NET.host) return;
+      await startOnline(toLocal(m.first === 1 ? 1 : 0), !!m.forced);
+      return;
+    case 'roll':
+      if (NET.host || !S.online) return;
+      await animateRoll(toLocal(m.p === 1 ? 1 : 0), cleanDie(m.v), S.token);
+      return;
+    case 'move':
+      if (NET.host) await hostMove(m.c);
+      return;
+    case 'place':
+      if (NET.host || !S.online) return;
+      await place(toLocal(m.p === 1 ? 1 : 0), m.c);
+      return;
+    case 'ability':
+      if (NET.host) await hostAbility(m.k);
+      return;
+    case 'reroll':
+      if (NET.host || !S.online) return;
+      await doReroll(toLocal(m.p === 1 ? 1 : 0), cleanDie(m.v));
+      return;
+    case 'flip':
+      if (NET.host || !S.online) return;
+      doFlip(toLocal(m.p === 1 ? 1 : 0));
+      return;
+    case 'nack':
+      if (S.phase === 'waiting'){ S.phase = 'placing'; render(); setStatus(turnPrompt(0), true); }
+      return;
+    case 'rematch':
+      NET.rematch.opp = true;
+      onRematchUpdate();
+      return;
+    case 'leave':
+      onNetLost(`${NET.oppName} покинул дуэль.`);
+      return;
+    case 'busy':
+      netFail('В этой комнате уже идёт дуэль.');
+      return;
+    case 'error':
+      netFail(String(m.text || 'Ошибка соединения.').slice(0, 120));
+      return;
+  }
+}
+
+async function hostMove(c){
+  await waitUntil(() => S.phase !== 'rolling');
+  if (S.phase !== 'placing' || S.turn !== 1 || !Number.isInteger(c) || c < 0 || c > 2 || S.G.boards[1][c].length >= 3){ netSend({t:'nack'}); return; }
+  netSend({t:'place', p: 1, c});
+  await place(1, c);
+}
+
+async function hostAbility(k){
+  await waitUntil(() => S.phase !== 'rolling');
+  if ((k !== 'reroll' && k !== 'flip') || !hasCharge(1, k)){ netSend({t:'nack'}); return; }
+  if (k === 'reroll'){
+    const v = rollFor(1);
+    netSend({t:'reroll', p: 1, v});
+    await doReroll(1, v);
+  } else {
+    netSend({t:'flip', p: 1});
+    doFlip(1);
+  }
+}
+
+function beginDuel(){
+  S.token++;
+  S.phase = 'idle';
+  NET.picks = {me: null, opp: null};
+  NET.rematch = {me: false, opp: false};
+  NET.started = false;
+  if (!NET.relics){
+    NET.picks.me = [];
+    netSend({t:'picks', ids: []});
+    showLobby({title: `Дуэль с ${NET.oppName}`, text: 'Классические правила, без даров. Начинаем…'});
+    checkReady();
+    return;
+  }
+  draftRound(0, []);
+}
+
+function draftRound(round, chosen){
+  const ids = shuffle(RELIC_IDS.filter(id => !RELICS[id].runOnly && !chosen.includes(id))).slice(0, 3);
+  showChoices({
+    title: `Дар для дуэли · ${round + 1} из ${DRAFT_ROUNDS}`,
+    sub: `Против: ${NET.oppName}. Соперник выбирает свои дары одновременно с вами.`,
+    ids,
+    onPick: id => {
+      if (!NET.active) return;
+      const next = chosen.concat(id);
+      if (round + 1 < DRAFT_ROUNDS){ draftRound(round + 1, next); return; }
+      NET.picks.me = next;
+      netSend({t:'picks', ids: next});
+      showLobby({title: 'Дары выбраны', text: NET.picks.opp ? 'Начинаем…' : `Ждём, пока ${NET.oppName} выберет дары…`});
+      checkReady();
+    }
+  });
+}
+
+async function checkReady(){
+  if (!NET.picks.me || !NET.picks.opp || NET.started) return;
+  if (!NET.host){ $('#lbText').textContent = 'Начинаем…'; return; }
+  NET.started = true;
+  const mods = [new Set(NET.picks.me), new Set(NET.picks.opp)];
+  const first = firstPlayer(mods);
+  netSend({t:'start', first: toNet(first.turn), forced: first.forced});
+  await startOnline(first.turn, first.forced);
+}
+
+async function startOnline(firstLocal, forced){
+  NET.started = true;
+  const opp = NET.picks.opp || [];
+  await initMatch({
+    mode: 'online',
+    mods: [new Set(NET.picks.me || []), new Set(opp)],
+    names: [myName(), NET.oppName],
+    tags: ['вы', 'онлайн'],
+    first: {turn: firstLocal, forced}
+  });
+}
+
+function requestRematch(){
+  if (!NET.active){ showMenu(); return; }
+  NET.rematch.me = true;
+  netSend({t:'rematch'});
+  const b = $('#btnAgain');
+  b.textContent = `Ждём ответа: ${NET.oppName}…`;
+  b.disabled = true;
+  onRematchUpdate();
+}
+function onRematchUpdate(){
+  if (NET.rematch.me && NET.rematch.opp){
+    if (NET.host){
+      netSend({t:'setup', v: PROTO, relics: NET.relics, name: myName()});
+      beginDuel();
+    }
+    return;
+  }
+  if (NET.rematch.opp && isShown(resultEl)) $('#resSub').textContent = `${NET.oppName} хочет реванш!`;
+}
+
+/* ---------- menu & overlays ---------- */
+const MODE_HINTS = {
+  run: 'Пять соперников подряд. После каждой победы — выбор из трёх даров.',
+  ai: 'Одна партия по классическим правилам против компьютера.',
+  pvp: 'Классика вдвоём на одном устройстве.',
+  online: 'Создайте комнату и отправьте ссылку другу — он подключится из своего браузера. Правила дуэли (с дарами или без) выбирает тот, кто создаёт комнату.'
+};
+function syncMenu(){
+  document.querySelectorAll('.seg').forEach(seg => {
+    const key = seg.dataset.key;
+    seg.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.v === settings[key]));
+  });
+  const mode = settings.mode;
+  $('#modeHint').textContent = MODE_HINTS[mode];
+  $('#levelField').style.display = mode === 'ai' ? '' : 'none';
+  $('#onlineField').style.display = mode === 'online' ? '' : 'none';
+  $('#inpName').value = settings.name || '';
+  $('#btnResume').classList.toggle('hidden', !inGame());
+  $('#btnLeave').classList.toggle('hidden', !NET.active);
+  const canContinue = mode === 'run' && R && !inGame();
+  $('#btnContinueRun').classList.toggle('hidden', !canContinue);
+  if (R) $('#btnContinueRun').textContent = `Продолжить поход · этап ${R.stage + 1} · ${'❤️'.repeat(R.lives)}`;
+  const startBtn = $('#btnStart');
+  startBtn.classList.toggle('hidden', mode === 'online');
+  startBtn.textContent = mode === 'run' ? 'Новый поход' : 'Новая игра';
+  startBtn.classList.toggle('primary', !canContinue);
+  startBtn.classList.toggle('ghost', canContinue);
+  if (mode === 'run'){
+    const b = store.get('kb.runBest', {best:0, clears:0});
+    $('#stats').textContent = `Лучший поход: ${b.best} из ${STAGES.length} этапов · пройден целиком: ${b.clears}`;
+  } else if (mode === 'ai'){
+    const st = (store.get('kb.stats', {})[settings.level]) || {w:0, l:0, d:0};
+    $('#stats').textContent = `Против «${LEVELS[settings.level]}»: побед ${st.w} · поражений ${st.l} · ничьих ${st.d}`;
+  } else $('#stats').textContent = '';
+}
+function showMenu(){ hideOverlays(); syncMenu(); show(menuEl); }
+function hideMenu(){ hide(menuEl); }
+function showRules(){ show(rulesEl); $('#btnRulesClose').focus(); }
+
+document.querySelectorAll('.seg').forEach(seg => {
+  seg.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    settings[seg.dataset.key] = b.dataset.v;
+    saveSettings();
+    syncMenu();
+  });
+});
+$('#inpName').addEventListener('input', e => { settings.name = e.target.value.slice(0, 16); saveSettings(); });
+$('#btnStart').addEventListener('click', () => settings.mode === 'run' ? startRun() : newGame());
+$('#btnContinueRun').addEventListener('click', continueRun);
+$('#btnResume').addEventListener('click', hideMenu);
+$('#btnLeave').addEventListener('click', () => { leaveOnline(); showMenu(); });
+$('#btnCreate').addEventListener('click', createRoom);
+$('#btnJoin').addEventListener('click', () => joinRoom($('#inpCode').value));
+$('#inpCode').addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom(e.target.value); });
+$('#btnMenu').addEventListener('click', showMenu);
+$('#btnRules').addEventListener('click', showRules);
+$('#btnMenuRules').addEventListener('click', showRules);
+$('#btnRulesClose').addEventListener('click', () => hide(rulesEl));
+$('#btnRvClose').addEventListener('click', () => hide(rvEl));
+$('#btnAgain').addEventListener('click', () => againFn());
+$('#btnToMenu').addEventListener('click', showMenu);
+$('#btnFight').addEventListener('click', newGame);
+$('#btnStageMenu').addEventListener('click', showMenu);
+$('#btnLobbyCancel').addEventListener('click', () => { leaveOnline(); showMenu(); });
+$('#btnCopy').addEventListener('click', async () => {
+  const inp = $('#lbLink');
+  let ok = false;
+  try { await navigator.clipboard.writeText(inp.value); ok = true; }
+  catch (e) { inp.select(); try { ok = document.execCommand('copy'); } catch (e2) {} }
+  $('#btnCopy').textContent = ok ? 'Скопировано ✓' : 'Выделите и скопируйте';
+  setTimeout(() => { $('#btnCopy').textContent = 'Копировать'; }, 2000);
+});
+$('#btnShare').addEventListener('click', () => {
+  if (navigator.share) navigator.share({title: 'Костяшки — дуэль', text: `Сыграем в Костяшки? Код комнаты: ${NET.code}`, url: $('#lbLink').value}).catch(() => {});
+});
+[rulesEl, rvEl].forEach(o => o.addEventListener('click', e => { if (e.target === o) hide(o); }));
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape'){
+    if (isShown(rulesEl)) return hide(rulesEl);
+    if (isShown(rvEl)) return hide(rvEl);
+    if (isShown(menuEl) && inGame()) return hideMenu();
+  }
+  if (overlays.some(isShown)) return;
+  if (['1','2','3'].includes(e.key)) onColumn(S.turn, Number(e.key) - 1);
+  else if (e.code === 'KeyR') useReroll();
+  else if (e.code === 'KeyF') useFlip();
+});
+
+/* rule examples */
+const NOMODS = new Set();
+document.querySelectorAll('.ex').forEach(ex => {
+  const vals = ex.dataset.dice.split(',').map(Number);
+  const cnt = {};
+  vals.forEach(v => cnt[v] = (cnt[v] || 0) + 1);
+  vals.forEach(v => {
+    const d = makeDie(v);
+    if (cnt[v] === 2) d.classList.add('m2');
+    if (cnt[v] === 3) d.classList.add('m3');
+    ex.appendChild(d);
+  });
+  const parts = Object.keys(cnt).map(v => cnt[v] > 1 ? `(${Array(cnt[v]).fill(v).join('+')})×${cnt[v]}` : v);
+  const span = document.createElement('span');
+  span.textContent = `= ${parts.join(' + ')} = ${colScore(vals, NOMODS, 0)}`;
+  ex.appendChild(span);
+});
+[6, 3, 5].forEach(v => $('#menuDice').appendChild(makeDie(v)));
+
+/* boot */
+buildBoards();
+render();
+const roomParam = new URLSearchParams(location.search).get('room');
+if (roomParam){
+  // opened from an invite link: join straight away (PeerJS loads async, so give it a moment)
+  history.replaceState(null, '', location.pathname);
+  settings.mode = 'online';
+  saveSettings();
+  joinRoom(roomParam);
+} else showMenu();
+
+// test hook for automated checks (harmless in production)
+window.__kb = {S, NET, RELICS, colScore, applyMove, chooseMove, get R(){ return R; }};
+})();
+</script>
+</body>
+</html>
