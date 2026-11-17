@@ -9,8 +9,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+SC:wght@600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
-<!-- PeerJS: browser-to-browser connection for online duels (uses the free public PeerJS signalling server) -->
-<script async src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<!-- MQTT.js: online duels relay moves through a free public MQTT broker over WebSocket -->
+<script async src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <style>
 :root{
   --bg:#140e0c;
@@ -344,7 +344,7 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
     <ul>
       <li>Один игрок создаёт комнату и отправляет ссылку или код. Второй открывает ссылку или вводит код в своём браузере.</li>
       <li>В режиме «2 дара каждому» оба игрока перед партией выбирают по два дара. Дары соперника видны у его имени.</li>
-      <li>Браузеры соединяются напрямую. Иногда строгие сети (корпоративные, некоторые мобильные) не пропускают соединение — тогда попробуйте другую сеть.</li>
+      <li>Ходы передаются через бесплатный публичный сервер сообщений, поэтому подключение работает из любой сети — Wi-Fi или мобильного интернета. Если на секунду пропадёт связь, игра сама переподключится.</li>
     </ul>
     <p class="hint">Клавиши <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> ставят кубик, <kbd>R</kbd> — переброс, <kbd>F</kbd> — перевёртыш.</p>
     <button class="btn primary" id="btnRulesClose" type="button">Понятно</button>
@@ -1232,18 +1232,28 @@ function endRunMatch(s0, s1){
   }
 }
 
-/* ---------- online duel (PeerJS, host-authoritative) ----------
+/* ---------- online duel (MQTT relay, host-authoritative) ----------
+   Moves travel through a free public MQTT broker over secure WebSocket, so it works from any
+   network (no direct browser-to-browser connection needed) and still needs no server of our own.
    The host rolls every die and validates the guest's moves; both browsers run the same engine.
    Player indices in messages are from the host's point of view: host = 0, guest = 1.
-   Each browser draws itself at the bottom (local index 0). */
-const PROTO = 1;
-const ROOM_PREFIX = 'kostyashki-duel-';
+   Each browser draws itself at the bottom (local index 0).
+   Messages carry sequence numbers and are re-sent until acknowledged, so a short drop
+   (a phone switching apps, a flaky network) doesn't lose moves. */
+const PROTO = 2;
+const BROKERS = [
+  'wss://broker.hivemq.com:8884/mqtt',
+  'wss://broker.emqx.io:8084/mqtt',
+  'wss://test.mosquitto.org:8081/mqtt',
+];
+const TOPIC = 'kostyashki/v2/';
 const CODE_ABC = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const DRAFT_ROUNDS = 2;
 const NET = {
-  peer: null, conn: null, host: false, active: false, code: '', relics: true, oppName: 'Соперник',
+  client: null, host: false, active: false, code: '', gid: '', peerGid: '', relics: true, oppName: 'Соперник',
   picks: {me: null, opp: null}, rematch: {me: false, opp: false}, started: false,
-  queue: Promise.resolve(), lastSeen: 0, joinTimer: null
+  queue: Promise.resolve(), lastSeen: 0, joinTimer: null, roomTimer: null, helloSent: false, attempt: 0,
+  outSeq: 0, inSeq: 0, outbox: [], lastResend: 0
 };
 const toNet = p => NET.host ? p : 1 - p;
 const toLocal = toNet;
@@ -1251,19 +1261,56 @@ const myName = () => (settings.name || '').trim().slice(0, 16) || 'Игрок';
 const cleanName = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 16) || 'Соперник';
 const cleanIds = ids => Array.isArray(ids) ? ids.filter(id => typeof id === 'string' && RELICS[id] && !RELICS[id].runOnly).slice(0, DRAFT_ROUNDS) : [];
 const cleanDie = v => (Number.isInteger(v) && v >= 1 && v <= 6) ? v : 1;
-const genCode = () => Array.from({length: 5}, () => CODE_ABC[Math.floor(Math.random() * CODE_ABC.length)]).join('');
+const randChar = () => CODE_ABC[Math.floor(Math.random() * CODE_ABC.length)];
+const genId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+// The first character of the room code also says which broker the room lives on.
+function genCode(bi){
+  let first;
+  do first = randChar(); while (CODE_ABC.indexOf(first) % BROKERS.length !== bi);
+  return first + Array.from({length: 4}, randChar).join('');
+}
+const brokerOf = code => CODE_ABC.indexOf(code[0]) % BROKERS.length;
 const roomLink = code => `${location.origin}${location.pathname}?room=${code}`;
+const tRoom = code => TOPIC + code + '/room';
+const tHost = code => TOPIC + code + '/h';
+const tGuest = (code, gid) => TOPIC + code + '/g/' + gid;
+const peerTopic = () => NET.host ? tGuest(NET.code, NET.peerGid) : tHost(NET.code);
 
-function netSend(m){ try { if (NET.conn && NET.conn.open) NET.conn.send(m); } catch (e) {} }
+function rawPub(m, client = NET.client){
+  if (!client || (NET.host && !NET.peerGid)) return;
+  try { client.publish(peerTopic(), JSON.stringify(Object.assign({from: NET.gid}, m))); } catch (e) {}
+}
+function netSend(m){
+  if (!NET.client || (NET.host && !NET.peerGid)) return;
+  const msg = Object.assign({}, m, {seq: ++NET.outSeq});
+  NET.outbox.push(msg);
+  NET.lastResend = Date.now();
+  rawPub(msg);
+}
+function resendOutbox(){
+  NET.lastResend = Date.now();
+  for (const m of NET.outbox) rawPub(m);
+}
+
 function netClose(){
-  const {conn, peer} = NET;
-  NET.conn = null; NET.peer = null; NET.active = false; NET.started = false;
-  clearTimeout(NET.joinTimer);
-  try { conn && conn.close(); } catch (e) {}
-  try { peer && peer.destroy(); } catch (e) {}
+  const c = NET.client;
+  NET.attempt++;
+  NET.client = null; NET.active = false; NET.started = false; NET.helloSent = false;
+  NET.peerGid = ''; NET.outbox = []; NET.outSeq = 0; NET.inSeq = 0;
+  clearTimeout(NET.joinTimer); clearTimeout(NET.roomTimer);
+  if (c) try { c.end(true); } catch (e) {}
 }
 function leaveOnline(){
-  if (NET.active) netSend({t:'leave'});
+  const c = NET.client;
+  if (c){
+    // say goodbye and close the room before hanging up
+    try {
+      if (NET.active) rawPub({t:'leave', seq: NET.outSeq + 1}, c);
+      if (NET.host) c.publish(tRoom(NET.code), '', {retain: true, qos: 1});
+    } catch (e) {}
+    NET.client = null;
+    setTimeout(() => { try { c.end(true); } catch (e) {} }, 500);
+  }
   const wasOnline = S.online;
   netClose();
   if (wasOnline){ S.online = false; resetTable(); }
@@ -1290,123 +1337,160 @@ function netFail(text){
   showLobby({title: 'Не получилось', text, spin: false, cancel: 'В меню'});
 }
 
-function peerErrorText(err){
-  switch (err && err.type){
-    case 'peer-unavailable': return 'Комната не найдена. Проверьте код или попросите друга создать новую.';
-    case 'browser-incompatible': return 'Этот браузер не поддерживает прямое соединение (WebRTC).';
-    case 'network': case 'server-error': case 'socket-error': case 'socket-closed':
-      return 'Нет связи с сервером подключений. Проверьте интернет и попробуйте ещё раз.';
-    default: return 'Ошибка соединения' + (err && err.type ? ` (${err.type})` : '') + '. Попробуйте ещё раз.';
-  }
-}
-
-async function peerReady(){
-  if (typeof window.Peer === 'function') return true;
-  showLobby({title: 'Подготовка', text: 'Загружаем сетевой модуль…'});
-  if (await waitUntil(() => typeof window.Peer === 'function', 10000)) return true;
-  showLobby({title: 'Не получилось', text: 'Сетевой модуль не загрузился. Онлайн-дуэль требует интернет — обновите страницу.', spin: false, cancel: 'В меню'});
-  return false;
-}
-
-async function createRoom(){
-  leaveOnline();
-  resetTable('Онлайн-дуэль');
-  if (!(await peerReady())) return;
-  NET.host = true;
-  NET.relics = settings.duelRelics !== 'off';
-  NET.code = genCode();
-  showLobby({title: 'Комната создана', code: NET.code, text: 'Подключаемся к сети…', share: true});
-  const peer = new Peer(ROOM_PREFIX + NET.code);
-  NET.peer = peer;
-  peer.on('open', () => {
-    if (peer !== NET.peer) return;
-    $('#lbText').textContent = 'Отправьте ссылку или код другу. Ждём соперника…';
-  });
-  peer.on('connection', conn => {
-    if (peer !== NET.peer) return;
-    if (NET.conn && NET.active){ conn.on('open', () => { try { conn.send({t:'busy'}); } catch (e) {} setTimeout(() => conn.close(), 500); }); return; }
-    if (NET.conn){ const stale = NET.conn; NET.conn = null; try { stale.close(); } catch (e) {} } // earlier attempt that never opened
-    attachConn(conn);
-  });
-  peer.on('disconnected', () => { if (peer === NET.peer && !NET.conn) try { peer.reconnect(); } catch (e) {} });
-  peer.on('error', err => {
-    if (peer !== NET.peer) return;
-    if (err.type === 'unavailable-id'){ netClose(); createRoom(); return; }
-    if (NET.active && (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error')) return; // signalling lost, data channel may still be fine
-    netFail(peerErrorText(err));
-  });
-}
-
-async function joinRoom(raw){
-  const code = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (code.length < 4){ $('#inpCode').focus(); return; }
-  leaveOnline();
-  resetTable('Онлайн-дуэль');
-  if (!(await peerReady())) return;
-  NET.host = false;
-  NET.code = code;
-  showLobby({title: 'Подключение', code, text: 'Ищем комнату…'});
-  const peer = new Peer();
-  NET.peer = peer;
-  peer.on('open', () => {
-    if (peer !== NET.peer) return;
-    attachConn(peer.connect(ROOM_PREFIX + code, {reliable: true}));
-  });
-  peer.on('error', err => {
-    if (peer !== NET.peer) return;
-    if (NET.active && (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error')) return;
-    netFail(peerErrorText(err));
-  });
-  NET.joinTimer = setTimeout(() => {
-    if (peer === NET.peer && !NET.active) netFail('Не удалось подключиться за 20 секунд. Проверьте код или попробуйте другую сеть.');
-  }, 20000);
-}
-
-function attachConn(conn){
-  NET.conn = conn;
-  conn.on('open', () => {
-    if (conn !== NET.conn) return;
-    NET.active = true;
-    NET.lastSeen = Date.now();
-    clearTimeout(NET.joinTimer);
-    if (NET.host) $('#lbText').textContent = 'Соперник подключается…';
-    else { $('#lbText').textContent = 'Соединились! Ждём хозяина комнаты…'; netSend({t:'hello', v: PROTO, name: myName()}); }
-  });
-  conn.on('data', m => {
-    if (conn !== NET.conn) return;
-    NET.lastSeen = Date.now();
-    if (!m || typeof m !== 'object' || typeof m.t !== 'string') return;
-    NET.queue = NET.queue.then(() => handleNet(m)).catch(e => console.error(e));
-  });
-  conn.on('close', () => {
-    if (conn !== NET.conn) return;
-    if (!NET.active && NET.host){ NET.conn = null; return; } // a guest gave up before connecting: keep waiting
-    onNetLost('Соперник отключился.');
-  });
-  conn.on('error', () => {
-    if (conn !== NET.conn) return;
-    if (NET.active) onNetLost('Соединение прервалось.');
-    else if (!NET.host) netFail('Не удалось установить прямое соединение. Возможно, сеть блокирует WebRTC — попробуйте другую сеть (например, мобильный интернет).');
-    else NET.conn = null; // host: keep the room open for the next attempt
-  });
-}
-
 function onNetLost(text){
-  if (!NET.conn) return;
+  if (!NET.client) return;
   const wasActive = NET.active;
+  if (NET.host) try { NET.client.publish(tRoom(NET.code), '', {retain: true, qos: 1}); } catch (e) {}
   netClose();
   S.token++;
   if (S.online){ S.online = false; S.phase = 'over'; render(); setStatus('Связь потеряна'); }
   showLobby({title: wasActive ? 'Дуэль прервана' : 'Не получилось', text, spin: false, cancel: 'В меню'});
 }
 
-// heartbeat: notices a silently dropped connection
+async function netReady(){
+  const ok = () => !!(window.mqtt && typeof window.mqtt.connect === 'function');
+  if (ok()) return true;
+  showLobby({title: 'Подготовка', text: 'Загружаем сетевой модуль…'});
+  if (await waitUntil(ok, 10000)) return true;
+  showLobby({title: 'Не получилось', text: 'Сетевой модуль не загрузился. Онлайн-дуэль требует интернет — обновите страницу.', spin: false, cancel: 'В меню'});
+  return false;
+}
+
+function brokerConnect(url, extra){
+  return new Promise((resolve, reject) => {
+    let client;
+    try { client = mqtt.connect(url, Object.assign({connectTimeout: 7000, reconnectPeriod: 0, keepalive: 20, clean: true}, extra)); }
+    catch (e) { reject(e); return; }
+    const timer = setTimeout(() => { try { client.end(true); } catch (e) {} reject(new Error('timeout')); }, 8000);
+    client.once('connect', () => { clearTimeout(timer); resolve(client); });
+    client.once('error', e => { clearTimeout(timer); try { client.end(true); } catch (x) {} reject(e); });
+  });
+}
+
+function setupClient(client){
+  NET.client = client;
+  client.options.reconnectPeriod = 2000; // from now on, reconnect by itself after drops
+  client.on('message', (topic, buf) => { if (client === NET.client) onMqtt(topic, buf ? buf.toString() : ''); });
+  client.on('offline', () => { if (client === NET.client && S.online) setStatus('Связь прервалась, переподключаемся…'); });
+  client.on('connect', () => {
+    if (client !== NET.client) return;
+    if (NET.host) client.publish(tRoom(NET.code), JSON.stringify({open: 1, v: PROTO}), {retain: true, qos: 1});
+    if (NET.outbox.length) resendOutbox();
+    if (S.online && S.phase === 'placing') setStatus(canAct(0) ? turnPrompt(0) : `${names[1]} выбирает колонку…`, true);
+  });
+}
+
+async function createRoom(){
+  leaveOnline();
+  resetTable('Онлайн-дуэль');
+  if (!(await netReady())) return;
+  const attempt = ++NET.attempt;
+  NET.host = true;
+  NET.relics = settings.duelRelics !== 'off';
+  NET.gid = genId();
+  showLobby({title: 'Создаём комнату', text: 'Подключаемся к серверу…'});
+  for (let bi = 0; bi < BROKERS.length; bi++){
+    const code = genCode(bi);
+    let client;
+    try { client = await brokerConnect(BROKERS[bi], {will: {topic: tRoom(code), payload: '', retain: true, qos: 1}}); }
+    catch (e) { if (attempt !== NET.attempt) return; continue; }
+    if (attempt !== NET.attempt){ try { client.end(true); } catch (e) {} return; }
+    NET.code = code;
+    setupClient(client);
+    client.subscribe(tHost(code), {qos: 1});
+    client.publish(tRoom(code), JSON.stringify({open: 1, v: PROTO}), {retain: true, qos: 1});
+    showLobby({title: 'Комната создана', code, text: 'Отправьте ссылку или код другу. Ждём соперника…', share: true});
+    return;
+  }
+  if (attempt === NET.attempt) netFail('Не удалось подключиться к серверу сообщений. Проверьте интернет и попробуйте ещё раз.');
+}
+
+async function joinRoom(raw){
+  const code = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length !== 5 || [...code].some(ch => !CODE_ABC.includes(ch))){
+    showLobby({title: 'Неверный код', text: 'Код комнаты — 5 символов, например K7QX2. Проверьте, что он введён без ошибок.', spin: false, cancel: 'В меню'});
+    return;
+  }
+  leaveOnline();
+  resetTable('Онлайн-дуэль');
+  if (!(await netReady())) return;
+  const attempt = ++NET.attempt;
+  NET.host = false;
+  NET.code = code;
+  NET.gid = genId();
+  showLobby({title: 'Подключение', code, text: 'Подключаемся к серверу…'});
+  let client;
+  try { client = await brokerConnect(BROKERS[brokerOf(code)]); }
+  catch (e) { if (attempt === NET.attempt) netFail('Не удалось подключиться к серверу сообщений. Проверьте интернет и попробуйте ещё раз.'); return; }
+  if (attempt !== NET.attempt){ try { client.end(true); } catch (e) {} return; }
+  setupClient(client);
+  client.subscribe([tGuest(code, NET.gid), tRoom(code)], {qos: 1});
+  $('#lbText').textContent = 'Ищем комнату…';
+  NET.roomTimer = setTimeout(() => {
+    if (client === NET.client && !NET.helloSent) netFail('Комната не найдена. Проверьте код или попросите друга создать новую.');
+  }, 6000);
+}
+
+function onMqtt(topic, text){
+  if (topic === tRoom(NET.code)){
+    if (NET.host) return;
+    let info = null;
+    try { info = text ? JSON.parse(text) : null; } catch (e) {}
+    if (!info || !info.open){
+      // an empty room record = the host closed it (or dropped); once playing, heartbeat decides
+      if (!NET.helloSent) netFail('Комната не найдена или уже закрыта. Попросите друга создать новую.');
+      return;
+    }
+    if (NET.helloSent) return;
+    if (info.v !== PROTO){ netFail('У вас с другом разные версии игры. Обновите страницу (оба).'); return; }
+    NET.helloSent = true;
+    clearTimeout(NET.roomTimer);
+    $('#lbText').textContent = 'Комната найдена! Ждём ответа…';
+    netSend({t:'hello', v: PROTO, name: myName()});
+    NET.joinTimer = setTimeout(() => {
+      if (!NET.active) netFail('Комната не отвечает. Возможно, друг закрыл вкладку — попросите создать новую комнату.');
+    }, 15000);
+    return;
+  }
+
+  let m;
+  try { m = JSON.parse(text); } catch (e) { return; }
+  if (!m || typeof m !== 'object' || typeof m.t !== 'string' || typeof m.from !== 'string') return;
+  if (NET.host){
+    if (!NET.peerGid){
+      if (m.t !== 'hello') return;
+      NET.peerGid = m.from;
+      NET.active = true;
+      $('#lbText').textContent = 'Соперник подключается…';
+    } else if (m.from !== NET.peerGid){
+      if (m.t === 'hello') try { NET.client.publish(tGuest(NET.code, m.from), JSON.stringify({t:'busy', from: NET.gid})); } catch (e) {}
+      return;
+    }
+  } else if (m.t === 'busy'){
+    netFail('В этой комнате уже идёт дуэль.');
+    return;
+  }
+
+  NET.lastSeen = Date.now();
+  if (m.t === 'ack'){ if (typeof m.ack === 'number') NET.outbox = NET.outbox.filter(x => x.seq > m.ack); return; }
+  if (m.t === 'ping') return;
+  if (typeof m.seq !== 'number') return;
+  if (m.seq !== NET.inSeq + 1){ if (m.seq <= NET.inSeq) rawPub({t:'ack', ack: NET.inSeq}); return; } // duplicate or gap
+  NET.inSeq = m.seq;
+  rawPub({t:'ack', ack: NET.inSeq});
+  if (!NET.host && !NET.active){ NET.active = true; clearTimeout(NET.joinTimer); }
+  NET.queue = NET.queue.then(() => handleNet(m)).catch(e => console.error(e));
+}
+
+// heartbeat + re-sending of unacknowledged messages
 setInterval(() => {
+  if (!NET.client) return;
+  if (NET.outbox.length && Date.now() - NET.lastResend > 2500) resendOutbox();
   if (!NET.active) return;
-  netSend({t:'ping'});
-  if (Date.now() - NET.lastSeen > 40000) onNetLost('Соединение прервалось.');
+  rawPub({t:'ping'});
+  if (Date.now() - NET.lastSeen > 45000) onNetLost(`${NET.oppName} не отвечает — связь потеряна.`);
 }, 3000);
-window.addEventListener('beforeunload', () => { if (NET.active) netSend({t:'leave'}); });
+window.addEventListener('beforeunload', () => { if (NET.client) leaveOnline(); });
 
 async function handleNet(m){
   switch (m.t){
@@ -1684,7 +1768,7 @@ buildBoards();
 render();
 const roomParam = new URLSearchParams(location.search).get('room');
 if (roomParam){
-  // opened from an invite link: join straight away (PeerJS loads async, so give it a moment)
+  // opened from an invite link: join straight away (the network module loads async; joinRoom waits for it)
   history.replaceState(null, '', location.pathname);
   settings.mode = 'online';
   saveSettings();
