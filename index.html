@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Костяшки</title>
-<meta name="description" content="Дуэль на кубиках: ставь кости в колонки, сжигай кости соперника, проходи поход с дарами или играй онлайн с другом.">
+<meta name="description" content="Дуэль на кубиках: выбирай героя, собирай дары, сжигай кости соперника — в походе, против ИИ или онлайн с другом.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='7' fill='%23efe5cf'/%3E%3Ccircle cx='10' cy='10' r='3' fill='%232a1b14'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%232a1b14'/%3E%3Ccircle cx='22' cy='22' r='3' fill='%232a1b14'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+SC:wght@600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
-<!-- MQTT.js: online duels relay moves through a free public MQTT broker over WebSocket -->
-<script async src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<!-- MQTT.js (MIT, see vendor/MQTT-LICENSE.md), served from this site so it loads wherever the game loads -->
+<script async src="vendor/mqtt.min.js"></script>
 <style>
 :root{
   --bg:#140e0c;
@@ -22,6 +22,7 @@
   --ember:#e8743b; --ember-soft:rgba(232,116,59,.16);
   --blood:#d4402f;
   --text:#f2e8d8; --muted:#a39182;
+  --k-passive:#f0c75a; --k-active:#86c9d6; --k-instant:#ec7a6a; --k-hero:#e8743b;
   --cell:min(72px, 15vw, 8.4vh);
   --gap:calc(var(--cell) * .1);
   --font-display:'Cormorant SC', Georgia, 'Times New Roman', serif;
@@ -31,27 +32,51 @@
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%}
 body{
-  background:radial-gradient(ellipse at 50% 45%, #3a2014 0%, #1b110d 48%, #0b0706 100%) fixed, var(--bg);
+  background:
+    radial-gradient(ellipse at 50% 40%, rgba(232,116,59,.10), transparent 55%),
+    radial-gradient(ellipse at 50% 45%, #3a2014 0%, #1b110d 48%, #0b0706 100%) fixed, var(--bg);
   color:var(--text); font-family:var(--font-ui);
   -webkit-tap-highlight-color:transparent; overflow-x:hidden;
 }
 button{font:inherit;color:inherit}
 #app{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column}
+.ic{width:100%;height:100%;display:block;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ic .f{fill:currentColor;stroke:none}
+
+/* icon tiles (relics) and medallions (heroes) */
+.rtile{--kc:var(--k-passive);position:relative;display:grid;place-items:center;width:44px;height:44px;border-radius:12px;flex:none;color:var(--kc);
+  background:radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--kc) 26%, #1a120d), #120c09 75%);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--kc) 55%, transparent), inset 0 1px 0 rgba(255,255,255,.08), 0 3px 10px rgba(0,0,0,.45)}
+.rtile .ic{width:62%;height:62%;filter:drop-shadow(0 0 6px color-mix(in srgb, var(--kc) 45%, transparent))}
+.rtile.active{--kc:var(--k-active)}
+.rtile.instant{--kc:var(--k-instant)}
+.rtile.hero{--kc:var(--k-hero)}
+.medal{--hc:#c98b4f;position:relative;display:grid;place-items:center;width:56px;height:56px;border-radius:50%;flex:none;color:#fff7e8;
+  background:radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--hc) 70%, #fff 6%), color-mix(in srgb, var(--hc) 35%, #120c09) 62%, #120c09 100%);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--hc) 75%, #000), 0 0 0 4px #120c09, 0 0 0 5px color-mix(in srgb, var(--hc) 40%, transparent), 0 6px 18px rgba(0,0,0,.55), inset 0 2px 6px rgba(255,255,255,.18)}
+.medal .ic{width:58%;height:58%;stroke-width:1.6;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
 
 /* top bar */
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px;max-width:1100px;width:100%;margin:0 auto}
-.logo{font-family:var(--font-display);font-size:clamp(22px,4vw,30px);margin:0;letter-spacing:.06em;color:var(--bone)}
+.logo{font-family:var(--font-display);font-size:clamp(22px,4vw,30px);margin:0;letter-spacing:.06em;color:var(--bone);text-shadow:0 2px 12px rgba(232,116,59,.25)}
 .icon-btn{background:transparent;border:1px solid var(--wood-edge);color:var(--muted);padding:8px 14px;border-radius:999px;font-size:14px;cursor:pointer;transition:color .15s,border-color .15s}
 .icon-btn:hover,.icon-btn:focus-visible{color:var(--text);border-color:var(--ember);outline:none}
 
 /* table layout */
 .table{flex:1;display:grid;grid-template-columns:1fr auto 1fr;grid-template-areas:"p0 arena p1";gap:24px;padding:8px 16px 24px;max-width:1100px;width:100%;margin:0 auto;align-items:stretch}
-.arena{grid-area:arena;display:flex;flex-direction:column;align-items:center;padding:calc(var(--cell)*.25);background:linear-gradient(#2a1c13,#1f150e);border:1px solid var(--wood-edge);border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.03)}
+.arena{grid-area:arena;display:flex;flex-direction:column;align-items:center;padding:calc(var(--cell)*.25);
+  background:repeating-linear-gradient(90deg, rgba(255,255,255,.012) 0 2px, transparent 2px 9px), linear-gradient(#2a1c13,#1f150e);
+  border:1px solid var(--wood-edge);border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.03),inset 0 0 40px rgba(0,0,0,.35)}
 #panel0{grid-area:p0;align-self:end}
 #panel1{grid-area:p1;align-self:start}
 .panel{display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px;border-radius:18px;border:1px solid transparent;transition:background .3s,border-color .3s}
 .panel.turn{background:var(--ember-soft);border-color:rgba(232,116,59,.45)}
-.who{text-align:center}
+.who{text-align:center;display:flex;flex-direction:column;align-items:center}
+.hero-badge{background:none;border:0;padding:0;margin:0 0 10px;cursor:pointer;border-radius:50%}
+.hero-badge:empty{display:none}
+.hero-badge .medal{width:64px;height:64px;transition:transform .15s}
+.hero-badge:hover .medal,.hero-badge:focus-visible .medal{transform:scale(1.06)}
+.hero-badge:focus-visible{outline:none}
 .name{font-family:var(--font-display);font-size:26px;color:var(--bone);line-height:1.1;overflow-wrap:anywhere}
 .tag{font-size:12px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;min-height:15px}
 .total{font-size:44px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1;display:inline-block}
@@ -59,20 +84,23 @@ button{font:inherit;color:inherit}
 .tray .die{width:100%;height:100%}
 .relics{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;max-width:240px}
 .relics:empty,.abil:empty{display:none}
-.relic{width:34px;height:34px;border-radius:10px;background:var(--slot);border:1px solid var(--slot-edge);display:grid;place-items:center;font-size:18px;cursor:pointer;padding:0;line-height:1}
-.relic:hover,.relic:focus-visible{border-color:var(--ember);outline:none}
+.relic{background:none;border:0;padding:0;cursor:pointer;border-radius:10px}
+.relic .rtile{width:34px;height:34px;border-radius:10px;transition:transform .15s}
+.relic:hover .rtile,.relic:focus-visible .rtile{transform:translateY(-2px)}
+.relic:focus-visible{outline:none}
 .relic-more{background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;text-underline-offset:3px;cursor:pointer;padding:4px 2px}
 .relic-more:hover{color:var(--text)}
 .abil{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
-.abil button{background:var(--slot);border:1px solid var(--wood-edge);border-radius:999px;padding:7px 12px;font-size:13px;cursor:pointer;white-space:nowrap}
+.abil button{display:inline-flex;align-items:center;gap:6px;background:var(--slot);border:1px solid var(--wood-edge);border-radius:999px;padding:6px 12px 6px 8px;font-size:13px;cursor:pointer;white-space:nowrap}
+.abil button .ic{width:16px;height:16px;color:var(--k-active)}
 .abil button:disabled{opacity:.38;cursor:default}
-.abil button:not(:disabled):hover,.abil button:not(:disabled):focus-visible{border-color:var(--ember);outline:none}
+.abil button:not(:disabled):hover,.abil button:not(:disabled):focus-visible{border-color:var(--k-active);outline:none}
 
 /* boards */
 .board{display:grid;grid-template-columns:repeat(3,auto);gap:var(--gap)}
 .col{display:grid;grid-template-rows:repeat(3,var(--cell));gap:var(--gap);padding:var(--gap);margin:0;background:transparent;border:2px solid transparent;border-radius:16px;cursor:default;transition:border-color .15s,background .15s}
 .col:disabled{cursor:default}
-.col.shielded{box-shadow:inset 0 0 0 1px rgba(134,201,214,.45),inset 0 0 16px rgba(134,201,214,.14)}
+.col.shielded{box-shadow:inset 0 0 0 1px rgba(134,201,214,.5),inset 0 0 18px rgba(134,201,214,.16)}
 .col.shatter{animation:shatter .55s ease-out}
 @keyframes shatter{30%{box-shadow:inset 0 0 0 3px var(--m3),0 0 26px rgba(134,201,214,.7)}}
 .board.active .col:not(.full){cursor:pointer;border-color:rgba(232,116,59,.22)}
@@ -87,9 +115,9 @@ button{font:inherit;color:inherit}
 #status.hot{color:var(--text);border-color:rgba(232,116,59,.6)}
 
 /* dice */
-.die{width:86%;height:86%;border-radius:20%;background:linear-gradient(145deg,#fbf4e3,var(--bone) 55%,var(--bone-shade));box-shadow:0 3px 0 var(--bone-shade),0 6px 12px rgba(0,0,0,.5);position:relative}
+.die{width:86%;height:86%;border-radius:20%;background:linear-gradient(145deg,#fbf4e3,var(--bone) 55%,var(--bone-shade));box-shadow:0 3px 0 var(--bone-shade),0 6px 12px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.7);position:relative}
 .face{position:absolute;inset:15%;display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);gap:4%}
-.pip{border-radius:50%;background:var(--pip);transform:scale(0)}
+.pip{border-radius:50%;background:radial-gradient(circle at 40% 35%, #5a4032, var(--pip) 70%);transform:scale(0)}
 .pip.on{transform:scale(.84)}
 .die.m2{background:linear-gradient(145deg,#fde9ad,var(--m2) 60%,var(--m2-shade));box-shadow:0 3px 0 var(--m2-shade),0 0 14px rgba(240,199,90,.4),0 6px 12px rgba(0,0,0,.5)}
 .die.m3{background:linear-gradient(145deg,#d3f1f5,var(--m3) 60%,var(--m3-shade));box-shadow:0 3px 0 var(--m3-shade),0 0 16px rgba(134,201,214,.5),0 6px 12px rgba(0,0,0,.5)}
@@ -114,10 +142,10 @@ button{font:inherit;color:inherit}
 @keyframes bump{50%{transform:scale(1.25);color:var(--m2)}}
 
 /* overlays */
-.overlay{position:fixed;inset:0;background:rgba(8,5,4,.8);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:grid;place-items:center;padding:16px;z-index:10;overflow-y:auto}
+.overlay{position:fixed;inset:0;background:rgba(8,5,4,.82);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:grid;place-items:center;padding:16px;z-index:10;overflow-y:auto}
 .overlay.hidden{display:none}
-.card{background:linear-gradient(#2b1d14,#1c130d);border:1px solid var(--wood-edge);border-radius:22px;padding:28px 24px;width:min(440px,100%);box-shadow:0 30px 80px rgba(0,0,0,.7);text-align:center}
-.card.wide{width:min(680px,100%)}
+.card{background:linear-gradient(#2b1d14,#1c130d);border:1px solid var(--wood-edge);border-radius:22px;padding:28px 24px;width:min(440px,100%);box-shadow:0 30px 80px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.04);text-align:center}
+.card.wide{width:min(720px,100%)}
 .card h2{font-family:var(--font-display);font-size:42px;margin:8px 0 2px;color:var(--bone);font-weight:700;line-height:1.05;overflow-wrap:anywhere}
 .sub{color:var(--muted);margin:0 0 18px}
 .card-dice{display:flex;justify-content:center;gap:10px}
@@ -132,8 +160,8 @@ button{font:inherit;color:inherit}
 .seg button.sel{background:var(--ember);color:#1b0f09;font-weight:600}
 .mode-hint{font-size:13px;color:var(--muted);margin:8px 2px 0;line-height:1.45}
 .btn{display:block;width:100%;padding:14px;border-radius:12px;font-weight:600;font-size:16px;cursor:pointer;margin-top:10px;border:1px solid transparent;transition:filter .15s,border-color .15s,opacity .15s}
-.btn.primary{background:var(--ember);color:#1b0f09}
-.btn.primary:hover{filter:brightness(1.1)}
+.btn.primary{background:linear-gradient(#f08a52,var(--ember));color:#1b0f09;box-shadow:0 4px 14px rgba(232,116,59,.25)}
+.btn.primary:hover{filter:brightness(1.08)}
 .btn.ghost{background:transparent;color:var(--text);border-color:var(--wood-edge)}
 .btn.ghost:hover{border-color:var(--ember)}
 .btn:disabled{opacity:.5;cursor:default;filter:none}
@@ -163,26 +191,53 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
 .res-score{font-size:30px;font-weight:600;font-variant-numeric:tabular-nums;margin:6px 0 4px}
 .res-score .vs{color:var(--muted);font-weight:400;margin:0 10px}
 
+/* hero picker in the menu */
+.hero-pick{display:flex;align-items:center;gap:14px;width:100%;background:var(--slot);border:1px solid var(--slot-edge);border-radius:14px;padding:10px 14px 10px 10px;cursor:pointer;text-align:left;transition:border-color .15s}
+.hero-pick:hover,.hero-pick:focus-visible{border-color:var(--ember);outline:none}
+.hero-pick .medal{width:48px;height:48px}
+.hero-pick .hp-txt{flex:1;min-width:0}
+.hero-pick .hp-name{font-family:var(--font-display);font-size:21px;color:var(--bone);line-height:1.1}
+.hero-pick .hp-ab{font-size:12px;color:var(--muted);margin-top:2px}
+.hero-pick .hp-change{font-size:12px;color:var(--ember);white-space:nowrap}
+.heroes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:6px}
+.hero-card{background:var(--slot);border:1px solid var(--wood-edge);border-radius:16px;padding:18px 12px 16px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;transition:transform .15s,border-color .15s,box-shadow .15s;animation:deal .35s ease-out backwards}
+.hero-card:hover,.hero-card:focus-visible{transform:translateY(-4px);border-color:var(--hc);box-shadow:0 10px 30px color-mix(in srgb, var(--hc) 22%, transparent);outline:none}
+.hero-card.sel{border-color:var(--hc);box-shadow:0 0 0 1px var(--hc) inset}
+.hero-card .medal{width:72px;height:72px;margin-bottom:4px}
+.hero-card .hc-title{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--hc)}
+.hero-card .hc-name{font-family:var(--font-display);font-size:24px;color:var(--bone);font-weight:700;line-height:1}
+.hero-card .hc-ab{font-weight:600;font-size:13px;color:var(--text);margin-top:4px}
+.hero-card .hc-desc{font-size:12.5px;color:var(--muted);line-height:1.45}
+
 /* run screens, relic lists */
 .track{display:flex;justify-content:center;align-items:center;gap:6px;margin:4px 0 10px}
 .track span{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:13px;background:var(--slot);border:1px solid var(--slot-edge);color:var(--muted)}
+.track span .ic{width:16px;height:16px}
 .track i{width:14px;height:1px;background:var(--wood-edge)}
 .track span.done{background:#3a2a1d;color:var(--m2);border-color:#5a4126}
 .track span.cur{background:var(--ember);color:#1b0f09;font-weight:600;border-color:var(--ember)}
-.hearts{font-size:18px;letter-spacing:3px;margin:2px 0 4px;min-height:22px}
+.stage-medal{display:flex;justify-content:center;margin:10px 0 6px}
+.stage-medal .medal{width:92px;height:92px}
+.hearts{display:flex;justify-content:center;gap:4px;margin:2px 0 4px;min-height:22px;color:#e2574a}
+.hearts .ic{width:20px;height:20px}
+.hearts .ic path{fill:currentColor;fill-opacity:.25}
 .rlist{text-align:left;margin:16px 0 0}
-.rrow{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid rgba(255,255,255,.05)}
-.rrow .ico{font-size:20px;width:28px;text-align:center;flex:none;line-height:1.2}
+.rrow{display:flex;gap:12px;align-items:center;padding:8px 0;border-top:1px solid rgba(255,255,255,.05)}
+.rrow .rtile,.rrow .medal{width:40px;height:40px}
 .rrow .rn{color:var(--bone);font-weight:600;font-size:14px}
+.rrow .rk{font-size:10.5px;text-transform:uppercase;letter-spacing:.12em;color:var(--ember);margin-left:6px;font-weight:600}
 .rrow .rd{font-size:13px;color:var(--muted);line-height:1.4}
-.rrow .rc{font-size:12px;color:var(--ember)}
+.rrow .rc{font-size:12px;color:var(--k-active)}
 .empty{font-size:13px;color:#6b5a4c;padding:6px 0}
 .choices{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:6px}
-.choice{background:var(--slot);border:1px solid var(--wood-edge);border-radius:16px;padding:18px 12px;cursor:pointer;text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px;transition:transform .15s,border-color .15s,box-shadow .15s;animation:deal .35s ease-out backwards}
-.choice:nth-child(2){animation-delay:.08s}
-.choice:nth-child(3){animation-delay:.16s}
+.choice{background:var(--slot);border:1px solid var(--wood-edge);border-radius:16px;padding:20px 12px 18px;cursor:pointer;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px;transition:transform .15s,border-color .15s,box-shadow .15s;animation:deal .35s ease-out backwards}
+.choice:nth-child(2),.hero-card:nth-child(2){animation-delay:.06s}
+.choice:nth-child(3),.hero-card:nth-child(3){animation-delay:.12s}
+.hero-card:nth-child(4){animation-delay:.18s}
+.hero-card:nth-child(5){animation-delay:.24s}
+.hero-card:nth-child(6){animation-delay:.3s}
 .choice:hover,.choice:focus-visible{transform:translateY(-4px);border-color:var(--ember);box-shadow:0 10px 30px rgba(232,116,59,.18);outline:none}
-.choice .ico{font-size:40px;line-height:1}
+.choice .rtile{width:68px;height:68px;border-radius:18px}
 .choice .txt{display:flex;flex-direction:column;gap:6px}
 .choice .kind{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--ember)}
 .choice .nm{font-family:var(--font-display);font-size:21px;color:var(--bone);font-weight:700;line-height:1.1}
@@ -200,31 +255,35 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
 
 /* mobile */
 @media (max-width:760px){
-  :root{--cell:min(62px, 17vw, 7vh)}
+  :root{--cell:min(62px, 17vw, 6.8vh)}
   .topbar{padding:10px 16px 4px}
   .table{grid-template-columns:1fr;grid-template-areas:"p1" "arena" "p0";gap:10px;padding:4px 16px 16px}
-  .panel{display:grid;grid-template-columns:1fr auto;grid-template-areas:"who tray" "relics tray" "abil tray";align-items:center;justify-items:start;padding:8px 14px;align-self:stretch!important;gap:6px 10px}
-  .who{grid-area:who;text-align:left;display:grid;grid-template-columns:auto auto;align-items:baseline;column-gap:14px}
+  .panel{display:grid;grid-template-columns:1fr auto;grid-template-areas:"who tray" "relics tray" "abil tray";align-items:center;justify-items:start;padding:8px 12px;align-self:stretch!important;gap:6px 10px}
+  .who{grid-area:who;text-align:left;display:grid;grid-template-columns:auto auto auto;align-items:center;column-gap:12px}
+  .hero-badge{grid-column:1;grid-row:1/3;margin:0}
+  .hero-badge .medal{width:44px;height:44px}
+  .name{grid-column:2;grid-row:1;font-size:20px}
+  .tag{grid-column:2;grid-row:2}
+  .total{grid-column:3;grid-row:1/3;font-size:30px;align-self:center}
   .relics{grid-area:relics;justify-content:flex-start;max-width:none}
   .abil{grid-area:abil;justify-content:flex-start}
-  .tray{grid-area:tray}
-  .relic{width:28px;height:28px;font-size:15px;border-radius:8px}
-  .name{font-size:21px}
-  .tag{grid-column:1;grid-row:2}
-  .total{font-size:30px;grid-row:1/3;grid-column:2;align-self:center}
-  .tray{width:calc(var(--cell)*1.05);height:calc(var(--cell)*1.05);padding:calc(var(--cell)*.12);border-radius:14px}
+  .tray{grid-area:tray;width:calc(var(--cell)*1.05);height:calc(var(--cell)*1.05);padding:calc(var(--cell)*.12);border-radius:14px}
+  .relic .rtile{width:28px;height:28px;border-radius:8px}
   .colscores span{font-size:17px;height:22px;line-height:22px}
   .divider{min-height:30px}
   #status{font-size:13px}
-  .abil button{padding:5px 10px;font-size:12px}
+  .abil button{padding:5px 10px 5px 7px;font-size:12px}
   .seg button{font-size:13px}
+  .heroes{grid-template-columns:repeat(2,1fr)}
 }
 @media (max-width:560px){
   .choices{grid-template-columns:1fr}
   .choice{flex-direction:row;text-align:left;padding:14px;gap:14px}
-  .choice .ico{font-size:32px}
+  .choice .rtile{width:54px;height:54px}
   .card h2{font-size:34px}
   .room-code{font-size:32px}
+  .hero-card{padding:14px 8px}
+  .hero-card .medal{width:56px;height:56px}
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
@@ -242,6 +301,7 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
   <main class="table">
     <section class="panel" id="panel1" aria-label="Соперник">
       <div class="who">
+        <button class="hero-badge" id="hero1" type="button"></button>
         <div class="name" id="name1">Соперник</div>
         <div class="tag" id="tag1"></div>
         <div class="total" id="total1" aria-live="polite">0</div>
@@ -260,6 +320,7 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
 
     <section class="panel" id="panel0" aria-label="Игрок">
       <div class="who">
+        <button class="hero-badge" id="hero0" type="button"></button>
         <div class="name" id="name0">Вы</div>
         <div class="tag" id="tag0"></div>
         <div class="total" id="total0" aria-live="polite">0</div>
@@ -287,6 +348,10 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
       </div>
       <p class="mode-hint" id="modeHint"></p>
     </div>
+    <div class="field" id="heroField">
+      <div class="label">Ваш герой</div>
+      <button class="hero-pick" id="btnHero" type="button"></button>
+    </div>
     <div class="field" id="levelField">
       <div class="label">Сложность</div>
       <div class="seg" data-key="level">
@@ -298,9 +363,9 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
     <div class="field" id="onlineField">
       <div class="label">Ваше имя</div>
       <input class="inp" id="inpName" maxlength="16" placeholder="Игрок" autocomplete="nickname">
-      <div class="label" style="margin-top:14px">Дары в дуэли</div>
+      <div class="label" style="margin-top:14px">Правила дуэли</div>
       <div class="seg" data-key="duelRelics">
-        <button type="button" data-v="on">2 дара каждому</button>
+        <button type="button" data-v="on">Герои и дары</button>
         <button type="button" data-v="off">Классика</button>
       </div>
       <button class="btn primary" id="btnCreate" type="button">Создать комнату</button>
@@ -319,6 +384,16 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
   </div>
 </div>
 
+<!-- Hero picker -->
+<div class="overlay hidden" id="heroes">
+  <div class="card wide">
+    <h2>Выберите героя</h2>
+    <p class="sub">У каждого героя своя способность. Она действует в походе, против ИИ и в онлайн-дуэли.</p>
+    <div class="heroes" id="heroGrid"></div>
+    <button class="btn ghost" id="btnHeroesClose" type="button">Назад</button>
+  </div>
+</div>
+
 <!-- Rules -->
 <div class="overlay hidden" id="rules">
   <div class="card rules">
@@ -333,20 +408,25 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
       <li>Ставя кубик, вы <b>сжигаете</b> все кубики того же значения в колонке соперника напротив. При наведении на колонку они подсвечиваются красным, а над полем видно, сколько очков принесёт ход.</li>
       <li>Игра заканчивается, как только у кого-то заполнены все 9 ячеек. Побеждает тот, у кого больше очков.</li>
     </ol>
+    <h3>Герои и дары</h3>
+    <ul>
+      <li>Перед игрой выберите <b>героя</b> — у каждого своя способность. Соперники тоже играют героями.</li>
+      <li><b>Дары</b> — дополнительные бонусы: золотые действуют постоянно, голубые — умения, которые вы включаете сами.</li>
+      <li>Нажмите на медальон героя или значки даров у любого игрока, чтобы прочитать, что они делают.</li>
+    </ul>
     <h3>Поход</h3>
     <ul>
       <li>Пять соперников подряд, каждый сильнее предыдущего. Последний — Хозяин Костей.</li>
-      <li>В начале похода и после каждой победы выбираете один из трёх случайных <b>даров</b>.</li>
-      <li>У соперников тоже бывают дары. Нажмите на значки даров у любого игрока, чтобы прочитать, что они делают.</li>
+      <li>В начале похода и после каждой победы выбираете один из трёх случайных даров.</li>
       <li>У вас 2 сердца. Поражение отнимает сердце, и бой можно переиграть. Ничья — переигровка без потерь.</li>
     </ul>
     <h3>Онлайн-дуэль</h3>
     <ul>
-      <li>Один игрок создаёт комнату и отправляет ссылку или код. Второй открывает ссылку или вводит код в своём браузере.</li>
-      <li>В режиме «2 дара каждому» оба игрока перед партией выбирают по два дара. Дары соперника видны у его имени.</li>
-      <li>Ходы передаются через бесплатный публичный сервер сообщений, поэтому подключение работает из любой сети — Wi-Fi или мобильного интернета. Если на секунду пропадёт связь, игра сама переподключится.</li>
+      <li>Один игрок создаёт комнату и отправляет ссылку или код, второй открывает ссылку или вводит код.</li>
+      <li>В режиме «Герои и дары» каждый играет своим героем и перед партией выбирает два дара.</li>
+      <li>Ходы идут через публичный сервер сообщений, поэтому подключение работает из любой сети. Если связь прерывается, игра сама переподключается и досылает ходы.</li>
     </ul>
-    <p class="hint">Клавиши <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> ставят кубик, <kbd>R</kbd> — переброс, <kbd>F</kbd> — перевёртыш.</p>
+    <p class="hint">Клавиши <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> ставят кубик, <kbd>R</kbd> — переброс, <kbd>F</kbd> — перевёртыш, <kbd>S</kbd> — подмена.</p>
     <button class="btn primary" id="btnRulesClose" type="button">Понятно</button>
   </div>
 </div>
@@ -354,7 +434,7 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
 <!-- Relic viewer -->
 <div class="overlay hidden" id="relicsView">
   <div class="card">
-    <h2>Дары</h2>
+    <h2>Герои и дары</h2>
     <div class="rlist">
       <div class="label" id="rvOppLabel">Соперник</div>
       <div id="rvOpp"></div>
@@ -371,16 +451,17 @@ kbd{background:var(--slot);border:1px solid var(--slot-edge);border-radius:5px;p
 <div class="overlay hidden" id="stage">
   <div class="card">
     <div class="track" id="stTrack"></div>
+    <div class="stage-medal" id="stMedal"></div>
     <div class="label" id="stLabel"></div>
     <h2 id="stName"></h2>
     <p class="sub" id="stSub"></p>
     <div class="hearts" id="stHearts"></div>
     <div class="rlist">
-      <div class="label">Дары соперника</div>
+      <div class="label">Соперник</div>
       <div id="stEnemy"></div>
     </div>
     <div class="rlist">
-      <div class="label">Ваши дары</div>
+      <div class="label">Вы</div>
       <div id="stMine"></div>
     </div>
     <button class="btn primary" id="btnFight" type="button">В бой</button>
@@ -451,40 +532,85 @@ const store = {
   del(k){ try { localStorage.removeItem(k); } catch (e) {} }
 };
 
+/* ---------- icons (24×24, stroke-based, drawn for this game) ---------- */
+const ICONS = {
+  six: '<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+  low: '<ellipse cx="12" cy="6.8" rx="7" ry="2.8"/><path d="M5 6.8v4.4c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V6.8"/><path d="M5 11.2v4.6c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-4.6"/><path d="M9 6.8h6"/>',
+  even: '<path d="M12 4.5V20M8 20h8M4.5 7.5h15"/><path d="M4.5 7.5L2 13.2a2.6 2.6 0 0 0 5 0L4.5 7.5zM19.5 7.5L17 13.2a2.6 2.6 0 0 0 5 0l-2.5-5.7z"/><circle cx="12" cy="4" r="1.2" class="f"/>',
+  pair: '<rect x="2.6" y="8.6" width="9.4" height="9.4" rx="2.2" transform="rotate(-9 7.3 13.3)"/><rect x="12" y="6" width="9.4" height="9.4" rx="2.2" transform="rotate(9 16.7 10.7)"/><circle cx="5.6" cy="11.6" r="1" class="f"/><circle cx="9" cy="15" r="1" class="f"/><circle cx="15" cy="8.7" r="1" class="f"/><circle cx="18.4" cy="12.7" r="1" class="f"/>',
+  crown: '<path d="M3 8l4.6 4L12 5l4.4 7L21 8l-1.9 9.5H4.9L3 8z"/><path d="M5 20.5h14"/><circle cx="12" cy="13.5" r="1.2" class="f"/>',
+  rainbow: '<path d="M2.5 18.5a9.5 9.5 0 0 1 19 0"/><path d="M6 18.5a6 6 0 0 1 12 0"/><path d="M9.5 18.5a2.5 2.5 0 0 1 5 0"/>',
+  center: '<path d="M3.5 4.5h17M5 7h14M6.8 7v10.5M10.3 7v10.5M13.7 7v10.5M17.2 7v10.5M5 17.5h14M3.5 20h17"/>',
+  armor: '<path d="M12 2.8l7.5 3v5.6c0 4.6-3.2 8.4-7.5 9.8-4.3-1.4-7.5-5.2-7.5-9.8V5.8L12 2.8z"/><path d="M12 7v10M8 11.2h8"/>',
+  anchor: '<circle cx="12" cy="4.8" r="2"/><path d="M12 6.8V21M7.5 10.5h9"/><path d="M4 13.5c.3 4.4 3.8 7.5 8 7.5s7.7-3.1 8-7.5"/><path d="M2.4 15.4L4 13.3l2.3 1.4M21.6 15.4L20 13.3l-2.3 1.4"/>',
+  ember: '<path d="M12 2.8c1.1 3.2 4.6 4.7 4.6 8.6a4.6 4.6 0 0 1-9.2 0c0-2.4 1.5-3.5 2-5 .8 1.3 1.6 1.9 2.5 2.2.4-2.1-.2-4 .1-5.8z"/><path d="M4 20.5h16M6.8 17.8h10.4"/>',
+  loaded: '<rect x="4" y="3.5" width="16" height="16" rx="3.6"/><circle cx="8.5" cy="8" r="1.2" class="f"/><circle cx="15.5" cy="8" r="1.2" class="f"/><circle cx="12" cy="11.5" r="1.2" class="f"/><circle cx="8.5" cy="15" r="1.2" class="f"/><circle cx="15.5" cy="15" r="1.2" class="f"/><path d="M7 22h10"/>',
+  headstart: '<path d="M5.5 21V3.5"/><path d="M5.5 4h12l-2.4 3.7 2.4 3.8h-12"/>',
+  first: '<path d="M13.2 2.5L4.8 13.6h6.4l-1.4 7.9 8.6-11.3h-6.6l1.4-7.7z"/>',
+  reroll: '<path d="M19.8 12.5a7.8 7.8 0 0 1-13.6 4.8M4.2 11.5a7.8 7.8 0 0 1 13.6-4.8"/><path d="M18.3 2.8v4.2h-4.2M5.7 21.2V17h4.2"/>',
+  flip: '<path d="M8 20.5V3.5M8 3.5L4.5 7M8 3.5L11.5 7M16 3.5v17M16 20.5L12.5 17M16 20.5l3.5-3.5"/>',
+  heart: '<path d="M12 20.5s-8.2-4.8-8.2-10.8A4.5 4.5 0 0 1 12 7.2a4.5 4.5 0 0 1 8.2 2.5c0 6-8.2 10.8-8.2 10.8z"/>',
+  // heroes
+  smith: '<path d="M2.8 9.2h13.4c0 2.4 1.9 3.4 5 3.4v1.1c-2.5 0-4 1-4.5 2.5H8.4c-.5-1.7-2-3.1-5.6-3.3V9.2z"/><path d="M8.8 16.2L7 20.5h10l-1.8-4.3"/><path d="M12.6 2.6l3.2 3.2M14.2 4.2L9.8 8.6"/>',
+  witch: '<path d="M2.5 18.6c3.3 1.8 15.7 1.8 19 0"/><path d="M5.6 18.4L9 9.6c1-2.6 2.3-4.5 5.2-6.1.4 2.1-.6 3.4-1.1 4.7l3.4 10.2"/><path d="M7.7 15.4c2.7.7 5.9.7 8.6 0"/><path d="M18.6 3.8l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z" class="f"/>',
+  monk: '<path d="M8.8 10.5h6.4v9.8H8.8z"/><path d="M12 2.6c1.7 1.9 2.4 3.2 2.4 4.4a2.4 2.4 0 0 1-4.8 0c0-1.2.7-2.5 2.4-4.4z"/><path d="M5.5 20.5h13M12 9.3v1.2"/>',
+  fox: '<path d="M3.8 3.6l4.7 5.2h7l4.7-5.2-1 9.3L12 20l-7.2-7.1-1-9.3z"/><path d="M8.7 12.6l1.8 1.1M15.3 12.6l-1.8 1.1"/><path d="M11 17h2"/>',
+  warden: '<path d="M6 21V9.5h12V21M4.5 9.5h15V4.5h-2.6v2.2h-2.4V4.5h-5v2.2H7.1V4.5H4.5v5z"/><path d="M9.8 21v-3.6a2.2 2.2 0 0 1 4.4 0V21M11 12.8h2"/>',
+  pyro: '<path d="M12 21.2a6.2 6.2 0 0 1-6.2-6.2c0-3.6 2.6-5.2 3.6-8.4 1.5 1.5 2.1 3.1 2.1 4.6 1-1 1.6-2.6 1.2-4.7 3.1 2.1 5.5 5 5.5 8.5a6.2 6.2 0 0 1-6.2 6.2z"/><path d="M12 21.2a2.6 2.6 0 0 1-2.6-2.6c0-1.6 1.3-2.4 1.9-3.7.9.8 1.2 1.7 1.2 2.4.5-.3.9-.9 1-1.7 1 .9 1.1 2 1.1 3a2.6 2.6 0 0 1-2.6 2.6z"/>',
+  boss: '<path d="M6.8 7l2.6 2.1L12 5.8l2.6 3.3L17.2 7v3.4H6.8z"/><path d="M6.2 13.6a5.8 5.8 0 0 1 11.6 0v2.6l-1.6 1.1v3.2H7.8v-3.2l-1.6-1.1z"/><circle cx="9.8" cy="14.6" r="1.3" class="f"/><circle cx="14.2" cy="14.6" r="1.3" class="f"/><path d="M11 20.3v-2M13 20.3v-2"/>',
+};
+const svg = id => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${ICONS[id] || ''}</svg>`;
+
 /* ---------- relics (дары) ---------- */
 const RELICS = {
-  six:      {icon:'🌞', name:'Солнечная шестёрка', desc:'Каждая 6 владельца приносит +3 очка.'},
-  low:      {icon:'🪙', name:'Медяки',             desc:'Каждая 1 и 2 владельца приносит +2 очка.'},
-  even:     {icon:'⚖️', name:'Чётный счёт',        desc:'Каждый чётный кубик владельца приносит +1 очко.'},
-  pair:     {icon:'💞', name:'Близнецы',           desc:'Каждая пара одинаковых кубиков в колонке даёт ещё +6.'},
-  crown:    {icon:'👑', name:'Корона',             desc:'Три одинаковых кубика умножаются на 4, а не на 3.'},
-  rainbow:  {icon:'🌈', name:'Радуга',             desc:'Колонка из трёх разных значений даёт +8.'},
-  center:   {icon:'🗿', name:'Опора',              desc:'Средняя колонка приносит в 1,5 раза больше очков.'},
-  armor:    {icon:'🛡️', name:'Броня',              desc:'Первое сжигание в каждой колонке владельца блокируется.'},
-  anchor:   {icon:'⚓', name:'Якорь',              desc:'Шестёрки владельца нельзя сжечь.'},
-  ember:    {icon:'🔥', name:'Угли',               desc:'+3 очка за каждый сожжённый кубик противника.'},
-  loaded:   {icon:'🎲', name:'Утяжелённая кость',  desc:'Владельцу никогда не выпадает 1.'},
-  headstart:{icon:'🏁', name:'Фора',               desc:'Партия начинается с +6 очков.'},
-  first:    {icon:'⚡', name:'Инициатива',         desc:'Владелец всегда ходит первым.'},
-  reroll:   {icon:'🔄', name:'Переброс',           desc:'Дважды за партию можно перебросить кубик.', kind:'active', charges:2},
-  flip:     {icon:'🙃', name:'Перевёртыш',         desc:'Раз за партию можно перевернуть кубик: 1↔6, 2↔5, 3↔4.', kind:'active', charges:1},
-  heart:    {icon:'❤️', name:'Запасное сердце',    desc:'+1 сердце в этом походе.', kind:'instant', runOnly:true},
+  six:      {name:'Солнечная шестёрка', desc:'Каждая 6 владельца приносит +3 очка.'},
+  low:      {name:'Медяки',             desc:'Каждая 1 и 2 владельца приносит +2 очка.'},
+  even:     {name:'Чётный счёт',        desc:'Каждый чётный кубик владельца приносит +1 очко.'},
+  pair:     {name:'Близнецы',           desc:'Каждая пара одинаковых кубиков в колонке даёт ещё +6.'},
+  crown:    {name:'Корона',             desc:'Три одинаковых кубика умножаются на 4, а не на 3.'},
+  rainbow:  {name:'Радуга',             desc:'Колонка из трёх разных значений даёт +8.'},
+  center:   {name:'Опора',              desc:'Средняя колонка приносит в 1,5 раза больше очков.'},
+  armor:    {name:'Броня',              desc:'Первое сжигание в каждой колонке владельца блокируется.'},
+  anchor:   {name:'Якорь',              desc:'Шестёрки владельца нельзя сжечь.'},
+  ember:    {name:'Угли',               desc:'+3 очка за каждый сожжённый кубик противника.'},
+  loaded:   {name:'Утяжелённая кость',  desc:'Владельцу никогда не выпадает 1.'},
+  headstart:{name:'Фора',               desc:'Партия начинается с +6 очков.'},
+  first:    {name:'Инициатива',         desc:'Владелец всегда ходит первым.'},
+  reroll:   {name:'Переброс',           desc:'Дважды за партию можно перебросить кубик.', kind:'active'},
+  flip:     {name:'Перевёртыш',         desc:'Раз за партию можно перевернуть кубик: 1↔6, 2↔5, 3↔4.', kind:'active'},
+  heart:    {name:'Запасное сердце',    desc:'+1 сердце в этом походе.', kind:'instant', runOnly:true},
 };
 const RELIC_IDS = Object.keys(RELICS);
 const KIND_LABEL = {passive:'Постоянный', active:'Умение', instant:'Сразу'};
 const AI_RELICS = RELIC_IDS.filter(id => !RELICS[id].kind);
+const relicTile = id => `<span class="rtile ${RELICS[id].kind || ''}">${svg(id)}</span>`;
+
+/* ---------- heroes ---------- */
+const HEROES = {
+  smith:  {name:'Горан', title:'Кузнец',    color:'#b9bcc6', ability:'anvil',   aname:'Наковальня', desc:'Три одинаковых кубика в колонке дают ещё +12 очков.'},
+  witch:  {name:'Мора',  title:'Ведьма',    color:'#b48cf0', ability:'hex',     aname:'Порча',      desc:'За каждый сожжённый вами кубик соперник теряет ещё 3 очка.'},
+  monk:   {name:'Ильм',  title:'Монах',     color:'#e9cf6e', ability:'monk',    aname:'Смирение',   desc:'Ваши единицы нельзя сжечь, и каждая приносит +4 очка.'},
+  fox:    {name:'Лис',   title:'Шулер',     color:'#e0913c', ability:'trick',   aname:'Подмена',    desc:'Раз за партию можно превратить свой кубик в шестёрку.', active:true},
+  warden: {name:'Вера',  title:'Стражница', color:'#6fc3d3', ability:'bastion', aname:'Бастион',    desc:'Средняя колонка под бронёй. Каждый отражённый удар даёт +5 очков.'},
+  pyro:   {name:'Аш',    title:'Пиромант',  color:'#ff5a36', ability:'blaze',   aname:'Пожар',      desc:'Ваши шестёрки сжигают шестёрки во всех колонках соперника.'},
+};
+const BOSS = {name:'Хозяин Костей', title:'Хозяин таверны', color:'#d4402f', ability:'fortress', aname:'Твердыня', desc:'Кубики в его заполненных колонках нельзя сжечь.'};
+const HERO_IDS = Object.keys(HEROES);
+const heroOf = id => HEROES[id] || (id === 'boss' ? BOSS : null);
+const heroFull = id => { const h = heroOf(id); return h ? (id === 'boss' ? h.name : `${h.title} ${h.name}`) : ''; };
+const medal = id => { const h = heroOf(id); return h ? `<span class="medal" style="--hc:${h.color}">${svg(id)}</span>` : ''; };
 
 const STAGES = [
-  {name:'Пьяный бочар',       level:'easy',   relics:0},
-  {name:'Шулер Кривой Палец', level:'normal', relics:1},
-  {name:'Вдова Ворона',       level:'normal', relics:2},
-  {name:'Старый звонарь',     level:'hard',   relics:2},
-  {name:'Хозяин Костей',      level:'hard',   relics:3, boss:true},
+  {level:'easy',   relics:0},
+  {level:'normal', relics:1},
+  {level:'normal', relics:2},
+  {level:'hard',   relics:2},
+  {level:'hard',   relics:3, boss:true},
 ];
 const START_LIVES = 2;
 
 /* ---------- rules engine ---------- */
-// G = {boards:[p][col][dice], shields:[p][col]bool, bonus:[p], mods:[Set,Set]}
+// G = {boards:[p][col][dice], shields:[p][col]bool, bonus:[p], mods:[Set,Set]} — mods hold relic ids and hero ability ids
 function colScore(col, mods, ci){
   const cnt = {};
   for (const v of col) cnt[v] = (cnt[v] || 0) + 1;
@@ -494,11 +620,13 @@ function colScore(col, mods, ci){
     const mult = (n === 3 && mods.has('crown')) ? 4 : n;
     s += v * n * mult;
     if (n === 2 && mods.has('pair')) s += 6;
+    if (n === 3 && mods.has('anvil')) s += 12;
   }
   for (const v of col){
     if (v === 6 && mods.has('six')) s += 3;
     if (v <= 2 && mods.has('low')) s += 2;
     if (v % 2 === 0 && mods.has('even')) s += 1;
+    if (v === 1 && mods.has('monk')) s += 4;
   }
   if (mods.has('rainbow') && col.length === 3 && Object.keys(cnt).length === 3) s += 8;
   if (mods.has('center') && ci === 1) s = Math.floor(s * 1.5);
@@ -510,6 +638,7 @@ const validCols = b => [0,1,2].filter(c => b[c].length < 3);
 const rollValues = mods => mods.has('loaded') ? [2,3,4,5,6] : [1,2,3,4,5,6];
 const rollFor = p => pick(rollValues(S.G.mods[p]));
 
+// res: {G, burns:[{c, idx[]}], burned:n, blocked:[cols], immune:[cols]}
 function applyMove(G, p, c, v){
   const n = {
     boards: G.boards.map(b => b.map(col => col.slice())),
@@ -517,18 +646,30 @@ function applyMove(G, p, c, v){
     bonus: G.bonus.slice(),
     mods: G.mods
   };
-  const q = 1 - p;
-  const res = {G: n, burned: [], blocked: false, immune: false};
+  const q = 1 - p, mp = G.mods[p], mq = G.mods[q];
+  const res = {G: n, burns: [], burned: 0, blocked: [], immune: []};
   n.boards[p][c].push(v);
-  const target = n.boards[q][c];
-  const hits = [];
-  target.forEach((x, i) => { if (x === v) hits.push(i); });
-  if (!hits.length) return res;
-  if (v === 6 && G.mods[q].has('anchor')){ res.immune = true; return res; }
-  if (n.shields[q][c]){ n.shields[q][c] = false; res.blocked = true; return res; }
-  n.boards[q][c] = target.filter(x => x !== v);
-  res.burned = hits;
-  if (G.mods[p].has('ember')) n.bonus[p] += 3 * hits.length;
+  const cols = (v === 6 && mp.has('blaze')) ? [0, 1, 2] : [c];
+  for (const cc of cols){
+    const target = n.boards[q][cc];
+    const hits = [];
+    target.forEach((x, i) => { if (x === v) hits.push(i); });
+    if (!hits.length) continue;
+    if ((v === 6 && mq.has('anchor')) || (v === 1 && mq.has('monk')) || (target.length === 3 && mq.has('fortress'))){ res.immune.push(cc); continue; }
+    if (n.shields[q][cc]){
+      n.shields[q][cc] = false;
+      res.blocked.push(cc);
+      if (mq.has('bastion')) n.bonus[q] += 5;
+      continue;
+    }
+    n.boards[q][cc] = target.filter(x => x !== v);
+    res.burns.push({c: cc, idx: hits});
+    res.burned += hits.length;
+  }
+  if (res.burned){
+    if (mp.has('ember')) n.bonus[p] += 3 * res.burned;
+    if (mp.has('hex')) n.bonus[q] -= 3 * res.burned;
+  }
   return res;
 }
 
@@ -569,15 +710,18 @@ function chooseMove(G, p, v, level){
   }
   return pick(bestCols);
 }
+const bestGreedy = (G, p, v) => Math.max(...validCols(G.boards[p]).map(c => greedyValue(G, p, c, v)));
 
 /* ---------- state ---------- */
-const settings = Object.assign({mode:'run', level:'normal', name:'', duelRelics:'on'}, store.get('kb.settings', {}));
+const settings = Object.assign({mode:'run', level:'normal', name:'', duelRelics:'on', hero:'smith'}, store.get('kb.settings', {}));
+if (!HEROES[settings.hero]) settings.hero = 'smith';
 const saveSettings = () => store.set('kb.settings', settings);
 const emptyG = () => ({boards:[[[],[],[]],[[],[],[]]], shields:[[false,false,false],[false,false,false]], bonus:[0,0], mods:[new Set(), new Set()]});
-const noCharges = () => ({reroll:0, flip:0});
+const noCharges = () => ({reroll:0, flip:0, six:0});
 // S.mode is fixed for the duration of a match, so changing the menu selection mid-game can't break it.
-const S = { G: emptyG(), turn: 0, die: null, phase: 'idle', token: 0, mode: 'ai', online: false, level: 'normal', charges: [noCharges(), noCharges()] };
-let R = store.get('kb.run', null);   // run: {stage, lives, relics[], enemy[]|null, pending:null|'start'|'win', offer[]|null}
+const S = { G: emptyG(), turn: 0, die: null, phase: 'idle', token: 0, mode: 'ai', online: false, level: 'normal',
+            charges: [noCharges(), noCharges()], heroes: [null, null], relics: [[], []] };
+let R = store.get('kb.run', null);   // run: {stage, lives, relics[], enemy[]|null, pending, offer[]|null, hero, foes[]}
 let names = ['Вы', 'Соперник'];
 let tagBase = ['', ''];
 let shownTotals = [null, null];
@@ -593,6 +737,7 @@ const totalEls = [$('#total0'), $('#total1')];
 const panelEls = [$('#panel0'), $('#panel1')];
 const tagEls = [$('#tag0'), $('#tag1')];
 const relicEls = [$('#relics0'), $('#relics1')];
+const heroEls = [$('#hero0'), $('#hero1')];
 const abilEl = $('#abil0');
 const abilBtns = {};
 const csEls = [[], []];
@@ -600,8 +745,8 @@ const colEls = [[], []];
 const cellEls = [[], []]; // [player][column][index from the centre line]
 const statusEl = $('#status');
 const menuEl = $('#menu'), rulesEl = $('#rules'), resultEl = $('#result'), stageEl = $('#stage'),
-      rewardEl = $('#reward'), lobbyEl = $('#lobby'), rvEl = $('#relicsView');
-const overlays = [menuEl, rulesEl, resultEl, stageEl, rewardEl, lobbyEl, rvEl];
+      rewardEl = $('#reward'), lobbyEl = $('#lobby'), rvEl = $('#relicsView'), heroesEl = $('#heroes');
+const overlays = [menuEl, rulesEl, resultEl, stageEl, rewardEl, lobbyEl, rvEl, heroesEl];
 const hideOverlays = () => overlays.forEach(hide);
 
 function makeDie(v){
@@ -683,10 +828,13 @@ function render(fresh){
       csEls[p][c].classList.toggle('zero', sc === 0);
     }
     const bonus = G.bonus[p];
-    tagEls[p].textContent = [tagBase[p], bonus ? `бонус +${bonus}` : ''].filter(Boolean).join(' · ');
+    tagEls[p].textContent = [tagBase[p], bonus ? `бонус ${bonus > 0 ? '+' : ''}${bonus}` : ''].filter(Boolean).join(' · ');
   }
-  if (abilBtns.reroll){ abilBtns.reroll.disabled = !(canAct(0) && hasCharge(0, 'reroll')); abilBtns.reroll.textContent = `🔄 Переброс · ${S.charges[0].reroll}`; }
-  if (abilBtns.flip){ abilBtns.flip.disabled = !(canAct(0) && hasCharge(0, 'flip')); abilBtns.flip.textContent = `🙃 Перевернуть · ${S.charges[0].flip}`; }
+  for (const k in abilBtns){
+    const b = abilBtns[k];
+    b.disabled = !(canAct(0) && hasCharge(0, k));
+    b.querySelector('span').textContent = `${b.dataset.label} · ${S.charges[0][k]}`;
+  }
   updateTotals();
 }
 
@@ -701,16 +849,21 @@ function updateTotals(){
   }
 }
 
-function renderRelics(){
+function renderSides(){
   for (const p of [0, 1]){
+    const h = S.heroes[p];
+    heroEls[p].innerHTML = h ? medal(h) : '';
+    heroEls[p].title = h ? `${heroFull(h)} — ${heroOf(h).aname}: ${heroOf(h).desc}` : '';
+    heroEls[p].setAttribute('aria-label', h ? `Герой: ${heroFull(h)}` : '');
     relicEls[p].innerHTML = '';
-    if (!S.G.mods[p].size) continue;
-    for (const id of S.G.mods[p]){
+    const ids = S.relics[p];
+    if (!ids.length) continue;
+    for (const id of ids){
       const r = RELICS[id];
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'relic';
-      b.textContent = r.icon;
+      b.innerHTML = relicTile(id);
       b.title = `${r.name}: ${r.desc}`;
       b.setAttribute('aria-label', b.title);
       b.addEventListener('click', openRelicsView);
@@ -724,38 +877,51 @@ function renderRelics(){
     relicEls[p].appendChild(more);
   }
   abilEl.innerHTML = '';
-  delete abilBtns.reroll; delete abilBtns.flip;
-  if (S.G.mods[0].has('reroll')){
-    abilBtns.reroll = document.createElement('button');
-    abilBtns.reroll.type = 'button';
-    abilBtns.reroll.title = 'Перебросить кубик (R)';
-    abilBtns.reroll.addEventListener('click', useReroll);
-    abilEl.appendChild(abilBtns.reroll);
-  }
-  if (S.G.mods[0].has('flip')){
-    abilBtns.flip = document.createElement('button');
-    abilBtns.flip.type = 'button';
-    abilBtns.flip.title = 'Перевернуть кубик (F)';
-    abilBtns.flip.addEventListener('click', useFlip);
-    abilEl.appendChild(abilBtns.flip);
-  }
+  for (const k of Object.keys(abilBtns)) delete abilBtns[k];
+  const addAbility = (k, icon, label, key) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.label = label;
+    b.title = `${label} (${key})`;
+    b.innerHTML = `${svg(icon)}<span></span>`;
+    b.addEventListener('click', () => useAbility(k));
+    abilEl.appendChild(b);
+    abilBtns[k] = b;
+  };
+  if (S.G.mods[0].has('reroll')) addAbility('reroll', 'reroll', 'Переброс', 'R');
+  if (S.G.mods[0].has('flip')) addAbility('flip', 'flip', 'Перевернуть', 'F');
+  if (S.G.mods[0].has('trick')) addAbility('six', 'fox', 'Подмена', 'S');
 }
 
-function relicRows(ids, el, emptyText, chargesOf){
+function heroRow(id, el){
+  const h = heroOf(id);
+  const row = document.createElement('div');
+  row.className = 'rrow';
+  row.innerHTML = `${medal(id)}<div><div class="rn"></div><div class="rd"></div></div>`;
+  row.querySelector('.rn').innerHTML = '';
+  row.querySelector('.rn').append(heroFull(id));
+  const k = document.createElement('span'); k.className = 'rk'; k.textContent = h.aname;
+  row.querySelector('.rn').appendChild(k);
+  row.querySelector('.rd').textContent = h.desc;
+  el.appendChild(row);
+}
+function relicRows(ids, el, emptyText, chargesOf, hero){
   el.innerHTML = '';
+  if (hero) heroRow(hero, el);
   if (!ids.length){
-    const e = document.createElement('div');
-    e.className = 'empty';
-    e.textContent = emptyText;
-    el.appendChild(e);
+    if (!hero){
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = emptyText;
+      el.appendChild(e);
+    }
     return;
   }
   for (const id of ids){
     const r = RELICS[id];
     const row = document.createElement('div');
     row.className = 'rrow';
-    row.innerHTML = '<span class="ico"></span><div><div class="rn"></div><div class="rd"></div><div class="rc"></div></div>';
-    row.querySelector('.ico').textContent = r.icon;
+    row.innerHTML = `${relicTile(id)}<div><div class="rn"></div><div class="rd"></div><div class="rc"></div></div>`;
     row.querySelector('.rn').textContent = r.name;
     row.querySelector('.rd').textContent = r.desc;
     const left = chargesOf && chargesOf(id);
@@ -766,10 +932,10 @@ function relicRows(ids, el, emptyText, chargesOf){
 
 function openRelicsView(){
   const charges = p => id => RELICS[id].kind === 'active' && inGame() ? S.charges[p][id] : null;
-  $('#rvOppLabel').textContent = `Дары: ${names[1]}`;
-  $('#rvMeLabel').textContent = S.mode === 'pvp' ? `Дары: ${names[0]}` : 'Ваши дары';
-  relicRows([...S.G.mods[1]], $('#rvOpp'), 'Нет даров', charges(1));
-  relicRows([...S.G.mods[0]], $('#rvMe'), 'Нет даров', charges(0));
+  $('#rvOppLabel').textContent = names[1];
+  $('#rvMeLabel').textContent = S.mode === 'pvp' ? names[0] : 'Вы';
+  relicRows(S.relics[1], $('#rvOpp'), 'Нет даров', charges(1), S.heroes[1]);
+  relicRows(S.relics[0], $('#rvMe'), 'Нет даров', charges(0), S.heroes[0]);
   show(rvEl);
   $('#btnRvClose').focus();
 }
@@ -790,13 +956,13 @@ function preview(p, c){
   g.classList.add('ghost');
   cellEls[p][c][col.length].appendChild(g);
   const res = applyMove(S.G, p, c, S.die);
-  res.burned.forEach(i => { const d = cellEls[q][c][i].firstChild; if (d) d.classList.add('threat'); });
+  res.burns.forEach(b => b.idx.forEach(i => { const d = cellEls[q][b.c][i].firstChild; if (d) d.classList.add('threat'); }));
   const gain = boardScore(res.G, p) - boardScore(S.G, p);
   const lost = boardScore(S.G, q) - boardScore(res.G, q);
   let t = `Колонка ${c + 1}: +${gain}`;
   if (lost > 0) t += ` · ${names[q]} −${lost}`;
-  if (res.blocked) t += ' · удар примет броня';
-  if (res.immune) t += ' · якорь защитит';
+  if (res.blocked.length) t += ' · удар примет броня';
+  if (res.immune.length) t += ' · кубики защищены';
   setStatus(t, true);
 }
 function clearPreview(){
@@ -810,7 +976,7 @@ function leavePreview(){
 
 /* ---------- game flow ---------- */
 // AI waits while the player is reading a menu / rules / relic list
-const paused = () => [menuEl, rulesEl, stageEl, rewardEl, rvEl].some(isShown);
+const paused = () => [menuEl, rulesEl, stageEl, rewardEl, rvEl, heroesEl].some(isShown);
 
 function turnPrompt(p){
   if (S.mode === 'pvp') return `Ход: ${names[p]} — выберите колонку`;
@@ -855,7 +1021,13 @@ async function animateRoll(p, v, tok){
   await wait(550 + Math.random() * 350);
   while (paused()){ await sleep(150); if (tok !== S.token) return; }
   if (tok !== S.token) return;
-  place(p, chooseMove(S.G, p, v, S.level));
+  // the trickster AI swaps a weak die for a six when it clearly pays off
+  if (S.charges[p].six > 0 && S.die < 6 && bestGreedy(S.G, p, 6) - bestGreedy(S.G, p, S.die) >= 8){
+    doTransform(p, 'six');
+    await wait(700);
+    if (tok !== S.token) return;
+  }
+  place(p, chooseMove(S.G, p, S.die, S.level));
 }
 
 function onColumn(p, c){
@@ -874,18 +1046,23 @@ function onColumn(p, c){
   place(p, c);
 }
 
-function useReroll(){
-  if (!canAct(0) || !hasCharge(0, 'reroll')) return;
-  if (S.online && !NET.host){ netSend({t:'ability', k:'reroll'}); S.phase = 'waiting'; clearPreview(); render(); setStatus('🔄 Переброс…', true); return; }
-  const v = rollFor(0);
-  if (S.online) netSend({t:'reroll', p: toNet(0), v});
-  doReroll(0, v);
-}
-function useFlip(){
-  if (!canAct(0) || !hasCharge(0, 'flip')) return;
-  if (S.online && !NET.host){ netSend({t:'ability', k:'flip'}); S.phase = 'waiting'; clearPreview(); render(); return; }
-  if (S.online) netSend({t:'flip', p: toNet(0)});
-  doFlip(0);
+function useAbility(k){
+  if (!canAct(0) || !hasCharge(0, k)) return;
+  if (S.online && !NET.host){
+    netSend({t:'ability', k});
+    S.phase = 'waiting';
+    clearPreview();
+    render();
+    return;
+  }
+  if (k === 'reroll'){
+    const v = rollFor(0);
+    if (S.online) netSend({t:'reroll', p: toNet(0), v});
+    doReroll(0, v);
+  } else {
+    if (S.online) netSend({t:'xform', p: toNet(0), k});
+    doTransform(0, k);
+  }
 }
 
 async function doReroll(p, v){
@@ -898,7 +1075,7 @@ async function doReroll(p, v){
   if (!d){ d = makeDie(v); trayEls[p].appendChild(d); }
   d.classList.remove('landed');
   d.classList.add('rolling');
-  setStatus(p === 0 && S.mode !== 'pvp' ? '🔄 Переброс…' : `🔄 ${names[p]} перебрасывает…`, true);
+  setStatus(isHuman(p) && S.mode !== 'pvp' ? 'Переброс…' : `${names[p]} перебрасывает…`, true);
   for (let i = 0; i < 7; i++){
     await wait(60);
     if (tok !== S.token) return;
@@ -910,19 +1087,22 @@ async function doReroll(p, v){
   S.die = v;
   S.phase = 'placing';
   render();
-  setStatus(isHuman(p) ? `🔄 Выпало ${v} — выберите колонку` : `🔄 ${names[p]} перебросил: ${v}`, true);
+  setStatus(isHuman(p) ? `Переброс: выпало ${v} — выберите колонку` : `${names[p]} перебросил: ${v}`, true);
 }
 
-function doFlip(p){
-  S.charges[p].flip = Math.max(0, S.charges[p].flip - 1);
+// 'flip' turns the die over (7 − v), 'six' (the trickster's swap) makes it a six
+function doTransform(p, k){
+  if (k !== 'flip' && k !== 'six') return;
+  S.charges[p][k] = Math.max(0, S.charges[p][k] - 1);
   clearPreview();
   const from = S.die;
-  S.die = 7 - from;
+  S.die = k === 'flip' ? 7 - from : 6;
   const d = trayEls[p].firstChild;
   if (d){ setFace(d, S.die); restartAnim(d, 'landed'); }
   S.phase = 'placing';
   render();
-  setStatus(isHuman(p) ? `🙃 ${from} → ${S.die} — выберите колонку` : `🙃 ${names[p]} перевернул: ${from} → ${S.die}`, true);
+  const what = k === 'flip' ? 'Перевёртыш' : 'Подмена';
+  setStatus(isHuman(p) ? `${what}: ${from} → ${S.die} — выберите колонку` : `${names[p]}: ${what.toLowerCase()} ${from} → ${S.die}`, true);
 }
 
 async function place(p, c){
@@ -936,33 +1116,34 @@ async function place(p, c){
   S.G.boards[p][c].push(v);
   render({p, c, i: S.G.boards[p][c].length - 1});
 
-  if (res.burned.length){
+  const notes = [];
+  if (res.burned){
     await wait(240);
     if (tok !== S.token) return;
-    res.burned.forEach(i => { const d = cellEls[q][c][i].firstChild; if (d) d.classList.add('burn'); });
+    res.burns.forEach(b => b.idx.forEach(i => { const d = cellEls[q][b.c][i].firstChild; if (d) d.classList.add('burn'); }));
     const lost = boardScore(S.G, q) - boardScore(res.G, q);
-    const ember = res.G.bonus[p] - S.G.bonus[p];
-    setStatus(`Сожжено: ${res.burned.length} × ${v} (−${lost})${ember ? ` · 🔥 +${ember}` : ''}`, true);
-    await wait(560);
+    notes.push(`Сожжено: ${res.burned} × ${v} (−${lost})`);
+    if (res.burns.length > 1) notes.push('пожар!');
+    if (S.G.mods[p].has('ember')) notes.push(`угли +${3 * res.burned}`);
+  }
+  if (res.blocked.length){
+    if (!res.burned){ await wait(240); if (tok !== S.token) return; }
+    res.blocked.forEach(cc => restartAnim(colEls[q][cc], 'shatter'));
+    notes.push(S.G.mods[q].has('bastion') ? 'бастион отразил удар (+5)' : 'броня поглотила удар');
+  }
+  if (res.immune.length){
+    if (!res.burned && !res.blocked.length){ await wait(240); if (tok !== S.token) return; }
+    notes.push(v === 6 && S.G.mods[q].has('anchor') ? 'якорь: шестёрки не горят'
+      : v === 1 && S.G.mods[q].has('monk') ? 'смирение: единицы не горят' : 'твердыня: полные колонки не горят');
+  }
+  if (notes.length){
+    const t = notes.join(' · ');
+    setStatus(t.charAt(0).toUpperCase() + t.slice(1), true);
+    await wait(res.burned ? 560 : 650);
     if (tok !== S.token) return;
     S.G = res.G;
     render();
-    await wait(250);
-  } else if (res.blocked){
-    await wait(240);
-    if (tok !== S.token) return;
-    restartAnim(colEls[q][c], 'shatter');
-    setStatus('🛡️ Броня поглотила удар', true);
-    S.G = res.G;
-    render();
-    await wait(650);
-  } else if (res.immune){
-    await wait(240);
-    if (tok !== S.token) return;
-    setStatus('⚓ Якорь: шестёрки не горят', true);
-    S.G = res.G;
-    render();
-    await wait(650);
+    await wait(res.burned ? 250 : 0);
   } else {
     S.G = res.G;
     await wait(260);
@@ -1002,7 +1183,7 @@ async function endGame(){
   } else if (S.mode === 'ai'){
     const stats = store.get('kb.stats', {});
     const st = stats[S.level] || {w:0, l:0, d:0};
-    const sub = `Сложность: ${LEVELS[S.level]}`;
+    const sub = `${names[1]} · ${LEVELS[S.level]}`;
     if (s0 > s1){ st.w++; setResult('Победа!', 'win', sub, 'Ещё раз', newGame); }
     else if (s0 < s1){ st.l++; setResult('Поражение', 'lose', sub, 'Ещё раз', newGame); }
     else { st.d++; setResult('Ничья', '', sub, 'Ещё раз', newGame); }
@@ -1024,24 +1205,35 @@ function firstPlayer(mods){
   if (f1 && !f0) return {turn: 1, forced: true};
   return {turn: Math.random() < 0.5 ? 0 : 1, forced: false};
 }
+// relic ids + hero abilities -> engine mods
+function buildMods(relics, heroes){
+  return [0, 1].map(p => {
+    const m = new Set(relics[p]);
+    const h = heroOf(heroes[p]);
+    if (h) m.add(h.ability);
+    return m;
+  });
+}
 
-// cfg: {mode, mods:[Set,Set], names, tags, level, first:{turn, forced}}
+// cfg: {mode, relics:[[],[]], heroes:[id|null,id|null], names, tags, level, first:{turn, forced}}
 async function initMatch(cfg){
   S.token++;
   const tok = S.token;
   S.mode = cfg.mode;
   S.online = cfg.mode === 'online';
   S.level = cfg.level || 'normal';
+  S.relics = cfg.relics.map(r => r.slice());
+  S.heroes = cfg.heroes.slice();
   names = cfg.names;
   tagBase = cfg.tags;
-  const mods = cfg.mods;
+  const mods = buildMods(cfg.relics, cfg.heroes);
   S.G = {
     boards: [[[],[],[]],[[],[],[]]],
-    shields: [0, 1].map(p => [0, 1, 2].map(() => mods[p].has('armor'))),
+    shields: [0, 1].map(p => [0, 1, 2].map(c => mods[p].has('armor') || (c === 1 && mods[p].has('bastion')))),
     bonus: [0, 1].map(p => mods[p].has('headstart') ? 6 : 0),
     mods
   };
-  S.charges = [0, 1].map(p => ({reroll: mods[p].has('reroll') ? 2 : 0, flip: mods[p].has('flip') ? 1 : 0}));
+  S.charges = [0, 1].map(p => ({reroll: mods[p].has('reroll') ? 2 : 0, flip: mods[p].has('flip') ? 1 : 0, six: mods[p].has('trick') ? 1 : 0}));
   S.die = null;
   S.phase = 'idle';
   shownTotals = [null, null];
@@ -1049,19 +1241,21 @@ async function initMatch(cfg){
   $('#name1').textContent = names[1];
   trayEls.forEach(t => t.innerHTML = '');
   hideOverlays();
-  renderRelics();
+  renderSides();
   S.turn = cfg.first.turn;
   render();
   const t = S.turn;
   let text;
   if (S.mode === 'pvp') text = `Жребий: первым ходит ${names[t]}`;
-  else if (t === 0) text = cfg.first.forced ? '⚡ Инициатива: вы ходите первым' : 'Жребий: вы ходите первым';
-  else text = cfg.first.forced ? `⚡ Первым ходит ${names[1]}` : `Жребий: первым ходит ${names[1]}`;
+  else if (t === 0) text = cfg.first.forced ? 'Инициатива: вы ходите первым' : 'Жребий: вы ходите первым';
+  else text = cfg.first.forced ? `Инициатива: первым ходит ${names[1]}` : `Жребий: первым ходит ${names[1]}`;
   setStatus(text, true);
   await wait(1000);
   if (tok !== S.token) return;
   startTurn();
 }
+
+const hearts = n => '♥'.repeat(n);
 
 function newGame(){
   leaveOnline();
@@ -1069,16 +1263,17 @@ function newGame(){
   let cfg;
   if (mode === 'run'){
     if (!R){ showMenu(); return; }
-    const st = STAGES[R.stage];
-    const mods = [new Set(R.relics), new Set(R.enemy || [])];
-    cfg = {mode, mods, level: st.level, names: ['Вы', st.name],
-      tags: ['❤️'.repeat(R.lives), `${st.boss ? 'Босс' : 'Этап ' + (R.stage + 1) + '/' + STAGES.length} · ${LEVELS[st.level]}`]};
+    fixRun();
+    const st = STAGES[R.stage], foe = foeOf(R.stage);
+    cfg = {mode, relics: [R.relics, R.enemy || []], heroes: [R.hero, foe], level: st.level, names: ['Вы', heroFull(foe)],
+      tags: [hearts(R.lives), `${st.boss ? 'Босс' : 'Этап ' + (R.stage + 1) + '/' + STAGES.length} · ${LEVELS[st.level]}`]};
   } else if (mode === 'pvp'){
-    cfg = {mode, mods: [new Set(), new Set()], names: ['Игрок 1', 'Игрок 2'], tags: ['снизу', 'сверху']};
+    cfg = {mode, relics: [[], []], heroes: [null, null], names: ['Игрок 1', 'Игрок 2'], tags: ['снизу', 'сверху']};
   } else {
-    cfg = {mode, mods: [new Set(), new Set()], level: settings.level, names: ['Вы', 'Соперник'], tags: ['', 'ИИ · ' + LEVELS[settings.level]]};
+    const foe = pick(HERO_IDS.filter(h => h !== settings.hero));
+    cfg = {mode, relics: [[], []], heroes: [settings.hero, foe], level: settings.level, names: ['Вы', heroFull(foe)], tags: ['', 'ИИ · ' + LEVELS[settings.level]]};
   }
-  cfg.first = firstPlayer(cfg.mods);
+  cfg.first = firstPlayer(buildMods(cfg.relics, cfg.heroes));
   initMatch(cfg);
 }
 
@@ -1087,8 +1282,10 @@ function resetTable(text){
   S.phase = 'idle';
   S.G = emptyG();
   S.charges = [noCharges(), noCharges()];
+  S.heroes = [null, null];
+  S.relics = [[], []];
   trayEls.forEach(t => t.innerHTML = '');
-  renderRelics();
+  renderSides();
   render();
   setStatus(text || 'Выберите режим, чтобы начать');
 }
@@ -1105,8 +1302,7 @@ function showChoices({title, sub, ids, onPick}){
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'choice';
-    b.innerHTML = '<span class="ico"></span><span class="txt"><span class="kind"></span><span class="nm"></span><span class="ds"></span></span>';
-    b.querySelector('.ico').textContent = r.icon;
+    b.innerHTML = `${relicTile(id)}<span class="txt"><span class="kind"></span><span class="nm"></span><span class="ds"></span></span>`;
     b.querySelector('.kind').textContent = KIND_LABEL[r.kind || 'passive'];
     b.querySelector('.nm').textContent = r.name;
     b.querySelector('.ds').textContent = r.desc;
@@ -1115,6 +1311,29 @@ function showChoices({title, sub, ids, onPick}){
   }
   show(rewardEl);
   box.firstChild.focus();
+}
+
+/* ---------- hero picker ---------- */
+function heroPickHtml(id){
+  const h = HEROES[id];
+  return `${medal(id)}<span class="hp-txt"><div class="hp-name">${h.title} ${h.name}</div><div class="hp-ab">${h.aname}: ${h.desc}</div></span><span class="hp-change">Сменить</span>`;
+}
+function showHeroes(){
+  const grid = $('#heroGrid');
+  grid.innerHTML = '';
+  for (const id of HERO_IDS){
+    const h = HEROES[id];
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'hero-card' + (id === settings.hero ? ' sel' : '');
+    b.style.setProperty('--hc', h.color);
+    b.innerHTML = `${medal(id)}<span class="hc-title">${h.title}</span><span class="hc-name">${h.name}</span><span class="hc-ab">${h.aname}</span><span class="hc-desc">${h.desc}</span>`;
+    b.addEventListener('click', () => { settings.hero = id; saveSettings(); hide(heroesEl); showMenu(); });
+    grid.appendChild(b);
+  }
+  hide(menuEl);
+  show(heroesEl);
+  (grid.querySelector('.sel') || grid.firstChild).focus();
 }
 
 /* ---------- run (поход) ---------- */
@@ -1126,17 +1345,28 @@ function recordBest(cleared, finished){
   if (finished) b.clears++;
   store.set('kb.runBest', b);
 }
+const pickFoes = hero => shuffle(HERO_IDS.filter(h => h !== hero)).slice(0, STAGES.length - 1);
+const foeOf = stage => STAGES[stage].boss ? 'boss' : R.foes[stage];
+// runs saved by older versions of the game have no hero/foes yet
+function fixRun(){
+  if (!R) return;
+  let changed = false;
+  if (!HEROES[R.hero]){ R.hero = settings.hero; changed = true; }
+  if (!Array.isArray(R.foes) || R.foes.length < STAGES.length - 1 || R.foes.some(f => !HEROES[f])){ R.foes = pickFoes(R.hero); changed = true; }
+  if (changed) saveRun();
+}
 
 function startRun(){
   leaveOnline();
   resetTable('Поход начинается…');
-  R = {stage:0, lives:START_LIVES, relics:[], enemy:null, pending:'start', offer:null};
+  R = {stage:0, lives:START_LIVES, relics:[], enemy:null, pending:'start', offer:null, hero: settings.hero, foes: pickFoes(settings.hero)};
   saveRun();
   showReward();
 }
 function continueRun(){
   if (!R) return;
   leaveOnline();
+  fixRun();
   if (R.pending) showReward(); else enterStage();
 }
 
@@ -1152,40 +1382,48 @@ function renderTrack(el){
   STAGES.forEach((st, i) => {
     if (i) el.appendChild(document.createElement('i'));
     const s = document.createElement('span');
-    s.textContent = i < R.stage ? '✓' : st.boss ? '☠' : String(i + 1);
+    if (i < R.stage) s.textContent = '✓';
+    else if (st.boss) s.innerHTML = svg('boss');
+    else s.textContent = String(i + 1);
     if (i < R.stage) s.className = 'done';
     if (i === R.stage) s.className = 'cur';
-    s.title = st.name;
+    s.title = heroFull(foeOf(i));
     el.appendChild(s);
   });
 }
 
+function heartsHtml(n){ return Array.from({length: n}, () => svg('heart')).join(''); }
+
 function enterStage(){
+  fixRun();
   if (!R.enemy){ R.enemy = rollEnemy(); saveRun(); }
-  const st = STAGES[R.stage];
+  const st = STAGES[R.stage], foe = foeOf(R.stage);
   hideOverlays();
   renderTrack($('#stTrack'));
+  $('#stMedal').innerHTML = medal(foe);
   $('#stLabel').textContent = st.boss ? 'Финальный бой' : `Этап ${R.stage + 1} из ${STAGES.length}`;
-  $('#stName').textContent = st.name;
+  $('#stName').textContent = heroFull(foe);
   $('#stSub').textContent = `Сложность: ${LEVELS[st.level]}`;
-  $('#stHearts').textContent = '❤️'.repeat(R.lives);
+  $('#stHearts').innerHTML = heartsHtml(R.lives);
   $('#stHearts').title = `Сердец: ${R.lives}`;
-  relicRows(R.enemy, $('#stEnemy'), 'Нет — играет честно');
-  relicRows(R.relics, $('#stMine'), 'Пока нет');
+  relicRows(R.enemy, $('#stEnemy'), 'Нет даров', null, foe);
+  relicRows(R.relics, $('#stMine'), 'Пока нет даров', null, R.hero);
   show(stageEl);
   $('#btnFight').focus();
 }
 
 function showReward(){
+  fixRun();
   if (!R.offer){
     const pool = RELIC_IDS.filter(id => id === 'heart' || !R.relics.includes(id));
     R.offer = shuffle(pool).slice(0, 3);
     saveRun();
   }
   const start = R.pending === 'start';
+  const next = foeOf(R.stage);
   showChoices({
     title: start ? 'Стартовый дар' : 'Выберите дар',
-    sub: start ? 'Он останется с вами на весь поход' : `Дальше: ${STAGES[R.stage].name}${STAGES[R.stage].boss ? ' (босс)' : ''}`,
+    sub: start ? `Ваш герой — ${heroFull(R.hero)}. Дар останется с вами на весь поход.` : `Дальше: ${heroFull(next)}${next === 'boss' ? ' (босс)' : ''}`,
     ids: R.offer,
     onPick: takeRelic
   });
@@ -1201,7 +1439,7 @@ function takeRelic(id){
 }
 
 function endRunMatch(s0, s1){
-  const st = STAGES[R.stage];
+  const foe = heroFull(foeOf(R.stage));
   if (s0 > s1){
     if (R.stage === STAGES.length - 1){
       recordBest(STAGES.length, true);
@@ -1214,7 +1452,7 @@ function endRunMatch(s0, s1){
       R.offer = null;
       saveRun();
       recordBest(R.stage, false);
-      setResult('Победа!', 'win', `Этап ${R.stage} из ${STAGES.length} пройден: ${st.name}`, 'Выбрать дар', showReward);
+      setResult('Победа!', 'win', `Этап ${R.stage} из ${STAGES.length} пройден: ${foe}`, 'Выбрать дар', showReward);
     }
   } else if (s0 === s1){
     setResult('Ничья', '', 'Бой переигрывается, сердце не потеряно', 'Переиграть', newGame);
@@ -1222,7 +1460,7 @@ function endRunMatch(s0, s1){
     R.lives--;
     if (R.lives > 0){
       saveRun();
-      setResult('Поражение', 'lose', `Осталось сердец: ${'❤️'.repeat(R.lives)}`, 'Реванш', newGame);
+      setResult('Поражение', 'lose', `Осталось сердец: ${R.lives}`, 'Реванш', newGame);
     } else {
       const cleared = R.stage;
       recordBest(cleared, false);
@@ -1233,33 +1471,36 @@ function endRunMatch(s0, s1){
 }
 
 /* ---------- online duel (MQTT relay, host-authoritative) ----------
-   Moves travel through a free public MQTT broker over secure WebSocket, so it works from any
-   network (no direct browser-to-browser connection needed) and still needs no server of our own.
-   The host rolls every die and validates the guest's moves; both browsers run the same engine.
-   Player indices in messages are from the host's point of view: host = 0, guest = 1.
-   Each browser draws itself at the bottom (local index 0).
-   Messages carry sequence numbers and are re-sent until acknowledged, so a short drop
-   (a phone switching apps, a flaky network) doesn't lose moves. */
-const PROTO = 2;
+   Moves travel through a free public MQTT broker over secure WebSocket, so it works from any network
+   and needs no server of our own. The host rolls every die and validates the guest's moves; both
+   browsers run the same engine. Player indices in messages are from the host's point of view
+   (host = 0, guest = 1); each browser draws itself at the bottom (local index 0).
+   Reliability: messages carry sequence numbers and are re-sent until acknowledged.
+   Some networks (e.g. Russian ISPs towards foreign hosting) silently freeze a TLS connection after
+   ~15–20 KB, so the connection is recycled well before that and whenever the peer goes quiet. */
+const PROTO = 3;
 const BROKERS = [
   'wss://broker.hivemq.com:8884/mqtt',
   'wss://broker.emqx.io:8084/mqtt',
   'wss://test.mosquitto.org:8081/mqtt',
 ];
-const TOPIC = 'kostyashki/v2/';
+const TOPIC = 'kostyashki/v3/';
 const CODE_ABC = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const DRAFT_ROUNDS = 2;
+const RECYCLE_BYTES = 4500;   // estimated bytes on one connection before we open a fresh one
+const QUIET_MS = 7000;        // no message from the peer for this long -> reconnect
 const NET = {
   client: null, host: false, active: false, code: '', gid: '', peerGid: '', relics: true, oppName: 'Соперник',
-  picks: {me: null, opp: null}, rematch: {me: false, opp: false}, started: false,
+  picks: {me: null, opp: null}, heroes: {me: null, opp: null}, rematch: {me: false, opp: false}, started: false,
   queue: Promise.resolve(), lastSeen: 0, joinTimer: null, roomTimer: null, helloSent: false, attempt: 0,
-  outSeq: 0, inSeq: 0, outbox: [], lastResend: 0
+  outSeq: 0, inSeq: 0, outbox: [], lastResend: 0, bytes: 0, lastRecycle: 0, lastPing: 0
 };
 const toNet = p => NET.host ? p : 1 - p;
 const toLocal = toNet;
 const myName = () => (settings.name || '').trim().slice(0, 16) || 'Игрок';
 const cleanName = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 16) || 'Соперник';
 const cleanIds = ids => Array.isArray(ids) ? ids.filter(id => typeof id === 'string' && RELICS[id] && !RELICS[id].runOnly).slice(0, DRAFT_ROUNDS) : [];
+const cleanHero = h => (typeof h === 'string' && HEROES[h]) ? h : null;
 const cleanDie = v => (Number.isInteger(v) && v >= 1 && v <= 6) ? v : 1;
 const randChar = () => CODE_ABC[Math.floor(Math.random() * CODE_ABC.length)];
 const genId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -1278,11 +1519,13 @@ const peerTopic = () => NET.host ? tGuest(NET.code, NET.peerGid) : tHost(NET.cod
 
 function rawPub(m, client = NET.client){
   if (!client || (NET.host && !NET.peerGid)) return;
-  try { client.publish(peerTopic(), JSON.stringify(Object.assign({from: NET.gid}, m))); } catch (e) {}
+  const topic = peerTopic(), body = JSON.stringify(Object.assign({from: NET.gid}, m));
+  NET.bytes += topic.length + body.length + 40;
+  try { client.publish(topic, body); } catch (e) {}
 }
 function netSend(m){
   if (!NET.client || (NET.host && !NET.peerGid)) return;
-  const msg = Object.assign({}, m, {seq: ++NET.outSeq});
+  const msg = Object.assign({}, m, {seq: ++NET.outSeq, at: Date.now()});
   NET.outbox.push(msg);
   NET.lastResend = Date.now();
   rawPub(msg);
@@ -1291,12 +1534,20 @@ function resendOutbox(){
   NET.lastResend = Date.now();
   for (const m of NET.outbox) rawPub(m);
 }
+// drop the current socket; MQTT.js reconnects on its own and we re-sync after that
+function recycle(minGap = 4000){
+  const c = NET.client;
+  if (!c || !c.connected || Date.now() - NET.lastRecycle < minGap) return;
+  NET.lastRecycle = Date.now();
+  NET.bytes = 0;
+  try { c.stream.destroy(); } catch (e) { try { c.reconnect(); } catch (x) {} }
+}
 
 function netClose(){
   const c = NET.client;
   NET.attempt++;
   NET.client = null; NET.active = false; NET.started = false; NET.helloSent = false;
-  NET.peerGid = ''; NET.outbox = []; NET.outSeq = 0; NET.inSeq = 0;
+  NET.peerGid = ''; NET.outbox = []; NET.outSeq = 0; NET.inSeq = 0; NET.bytes = 0;
   clearTimeout(NET.joinTimer); clearTimeout(NET.roomTimer);
   if (c) try { c.end(true); } catch (e) {}
 }
@@ -1351,15 +1602,15 @@ async function netReady(){
   const ok = () => !!(window.mqtt && typeof window.mqtt.connect === 'function');
   if (ok()) return true;
   showLobby({title: 'Подготовка', text: 'Загружаем сетевой модуль…'});
-  if (await waitUntil(ok, 10000)) return true;
-  showLobby({title: 'Не получилось', text: 'Сетевой модуль не загрузился. Онлайн-дуэль требует интернет — обновите страницу.', spin: false, cancel: 'В меню'});
+  if (await waitUntil(ok, 15000)) return true;
+  showLobby({title: 'Не получилось', text: 'Сетевой модуль не загрузился. Проверьте интернет и обновите страницу.', spin: false, cancel: 'В меню'});
   return false;
 }
 
 function brokerConnect(url, extra){
   return new Promise((resolve, reject) => {
     let client;
-    try { client = mqtt.connect(url, Object.assign({connectTimeout: 7000, reconnectPeriod: 0, keepalive: 20, clean: true}, extra)); }
+    try { client = mqtt.connect(url, Object.assign({connectTimeout: 7000, reconnectPeriod: 0, keepalive: 30, clean: true}, extra)); }
     catch (e) { reject(e); return; }
     const timer = setTimeout(() => { try { client.end(true); } catch (e) {} reject(new Error('timeout')); }, 8000);
     client.once('connect', () => { clearTimeout(timer); resolve(client); });
@@ -1369,14 +1620,16 @@ function brokerConnect(url, extra){
 
 function setupClient(client){
   NET.client = client;
-  client.options.reconnectPeriod = 2000; // from now on, reconnect by itself after drops
+  NET.bytes = 0;
+  client.options.reconnectPeriod = 400; // from now on, reconnect by itself after drops (and after recycle)
   client.on('message', (topic, buf) => { if (client === NET.client) onMqtt(topic, buf ? buf.toString() : ''); });
-  client.on('offline', () => { if (client === NET.client && S.online) setStatus('Связь прервалась, переподключаемся…'); });
+  client.on('offline', () => { if (client === NET.client && S.online && Date.now() - NET.lastRecycle > 3000) setStatus('Связь прервалась, переподключаемся…'); });
   client.on('connect', () => {
     if (client !== NET.client) return;
+    NET.bytes = 0;
     if (NET.host) client.publish(tRoom(NET.code), JSON.stringify({open: 1, v: PROTO}), {retain: true, qos: 1});
     if (NET.outbox.length) resendOutbox();
-    if (S.online && S.phase === 'placing') setStatus(canAct(0) ? turnPrompt(0) : `${names[1]} выбирает колонку…`, true);
+    if (NET.active) rawPub({t:'sync', ack: NET.inSeq}); // ask the peer to re-send what we may have missed
   });
 }
 
@@ -1432,12 +1685,13 @@ async function joinRoom(raw){
 }
 
 function onMqtt(topic, text){
+  NET.bytes += topic.length + text.length + 40;
   if (topic === tRoom(NET.code)){
     if (NET.host) return;
     let info = null;
     try { info = text ? JSON.parse(text) : null; } catch (e) {}
     if (!info || !info.open){
-      // an empty room record = the host closed it (or dropped); once playing, heartbeat decides
+      // an empty room record = the host closed it (or dropped); once playing, the heartbeat decides
       if (!NET.helloSent) netFail('Комната не найдена или уже закрыта. Попросите друга создать новую.');
       return;
     }
@@ -1472,7 +1726,11 @@ function onMqtt(topic, text){
   }
 
   NET.lastSeen = Date.now();
-  if (m.t === 'ack'){ if (typeof m.ack === 'number') NET.outbox = NET.outbox.filter(x => x.seq > m.ack); return; }
+  if (m.t === 'ack' || m.t === 'sync'){
+    if (typeof m.ack === 'number') NET.outbox = NET.outbox.filter(x => x.seq > m.ack);
+    if (m.t === 'sync') resendOutbox();
+    return;
+  }
   if (m.t === 'ping') return;
   if (typeof m.seq !== 'number') return;
   if (m.seq !== NET.inSeq + 1){ if (m.seq <= NET.inSeq) rawPub({t:'ack', ack: NET.inSeq}); return; } // duplicate or gap
@@ -1482,14 +1740,19 @@ function onMqtt(topic, text){
   NET.queue = NET.queue.then(() => handleNet(m)).catch(e => console.error(e));
 }
 
-// heartbeat + re-sending of unacknowledged messages
+// heartbeat, re-sending, and connection recycling
 setInterval(() => {
-  if (!NET.client) return;
-  if (NET.outbox.length && Date.now() - NET.lastResend > 2500) resendOutbox();
+  const c = NET.client;
+  if (!c) return;
+  const now = Date.now();
+  if (NET.outbox.length && now - NET.lastResend > 1500) resendOutbox();
   if (!NET.active) return;
-  rawPub({t:'ping'});
-  if (Date.now() - NET.lastSeen > 45000) onNetLost(`${NET.oppName} не отвечает — связь потеряна.`);
-}, 3000);
+  if (now - NET.lastPing > 3000){ NET.lastPing = now; rawPub({t:'ping'}); }
+  const stuck = NET.outbox.length && now - NET.outbox[0].at > 4000;
+  if (c.connected && (NET.bytes > RECYCLE_BYTES || stuck)) recycle();
+  else if (c.connected && now - NET.lastSeen > QUIET_MS) recycle(10000); // peer silent: maybe our socket froze
+  if (now - NET.lastSeen > 45000) onNetLost(`${NET.oppName} не отвечает — связь потеряна.`);
+}, 1000);
 window.addEventListener('beforeunload', () => { if (NET.client) leaveOnline(); });
 
 async function handleNet(m){
@@ -1510,6 +1773,7 @@ async function handleNet(m){
       return;
     case 'picks':
       NET.picks.opp = cleanIds(m.ids);
+      NET.heroes.opp = NET.relics ? cleanHero(m.hero) : null;
       await checkReady();
       return;
     case 'start':
@@ -1534,9 +1798,9 @@ async function handleNet(m){
       if (NET.host || !S.online) return;
       await doReroll(toLocal(m.p === 1 ? 1 : 0), cleanDie(m.v));
       return;
-    case 'flip':
+    case 'xform':
       if (NET.host || !S.online) return;
-      doFlip(toLocal(m.p === 1 ? 1 : 0));
+      doTransform(toLocal(m.p === 1 ? 1 : 0), m.k);
       return;
     case 'nack':
       if (S.phase === 'waiting'){ S.phase = 'placing'; render(); setStatus(turnPrompt(0), true); }
@@ -1547,9 +1811,6 @@ async function handleNet(m){
       return;
     case 'leave':
       onNetLost(`${NET.oppName} покинул дуэль.`);
-      return;
-    case 'busy':
-      netFail('В этой комнате уже идёт дуэль.');
       return;
     case 'error':
       netFail(String(m.text || 'Ошибка соединения.').slice(0, 120));
@@ -1566,14 +1827,14 @@ async function hostMove(c){
 
 async function hostAbility(k){
   await waitUntil(() => S.phase !== 'rolling');
-  if ((k !== 'reroll' && k !== 'flip') || !hasCharge(1, k)){ netSend({t:'nack'}); return; }
+  if (!['reroll','flip','six'].includes(k) || !hasCharge(1, k)){ netSend({t:'nack'}); return; }
   if (k === 'reroll'){
     const v = rollFor(1);
     netSend({t:'reroll', p: 1, v});
     await doReroll(1, v);
   } else {
-    netSend({t:'flip', p: 1});
-    doFlip(1);
+    netSend({t:'xform', p: 1, k});
+    doTransform(1, k);
   }
 }
 
@@ -1581,12 +1842,13 @@ function beginDuel(){
   S.token++;
   S.phase = 'idle';
   NET.picks = {me: null, opp: null};
+  NET.heroes = {me: NET.relics ? settings.hero : null, opp: null};
   NET.rematch = {me: false, opp: false};
   NET.started = false;
   if (!NET.relics){
     NET.picks.me = [];
-    netSend({t:'picks', ids: []});
-    showLobby({title: `Дуэль с ${NET.oppName}`, text: 'Классические правила, без даров. Начинаем…'});
+    netSend({t:'picks', ids: [], hero: null});
+    showLobby({title: `Дуэль с ${NET.oppName}`, text: 'Классические правила: без героев и даров. Начинаем…'});
     checkReady();
     return;
   }
@@ -1597,14 +1859,14 @@ function draftRound(round, chosen){
   const ids = shuffle(RELIC_IDS.filter(id => !RELICS[id].runOnly && !chosen.includes(id))).slice(0, 3);
   showChoices({
     title: `Дар для дуэли · ${round + 1} из ${DRAFT_ROUNDS}`,
-    sub: `Против: ${NET.oppName}. Соперник выбирает свои дары одновременно с вами.`,
+    sub: `Вы играете героем ${heroFull(settings.hero)} против ${NET.oppName}. Соперник выбирает дары одновременно с вами.`,
     ids,
     onPick: id => {
       if (!NET.active) return;
       const next = chosen.concat(id);
       if (round + 1 < DRAFT_ROUNDS){ draftRound(round + 1, next); return; }
       NET.picks.me = next;
-      netSend({t:'picks', ids: next});
+      netSend({t:'picks', ids: next, hero: settings.hero});
       showLobby({title: 'Дары выбраны', text: NET.picks.opp ? 'Начинаем…' : `Ждём, пока ${NET.oppName} выберет дары…`});
       checkReady();
     }
@@ -1615,20 +1877,20 @@ async function checkReady(){
   if (!NET.picks.me || !NET.picks.opp || NET.started) return;
   if (!NET.host){ $('#lbText').textContent = 'Начинаем…'; return; }
   NET.started = true;
-  const mods = [new Set(NET.picks.me), new Set(NET.picks.opp)];
-  const first = firstPlayer(mods);
+  const first = firstPlayer(buildMods([NET.picks.me, NET.picks.opp], [NET.heroes.me, NET.heroes.opp]));
   netSend({t:'start', first: toNet(first.turn), forced: first.forced});
   await startOnline(first.turn, first.forced);
 }
 
 async function startOnline(firstLocal, forced){
   NET.started = true;
-  const opp = NET.picks.opp || [];
+  const oppHero = NET.heroes.opp;
   await initMatch({
     mode: 'online',
-    mods: [new Set(NET.picks.me || []), new Set(opp)],
+    relics: [NET.picks.me || [], NET.picks.opp || []],
+    heroes: [NET.heroes.me, oppHero],
     names: [myName(), NET.oppName],
-    tags: ['вы', 'онлайн'],
+    tags: [NET.heroes.me ? heroFull(NET.heroes.me) : 'вы', oppHero ? heroFull(oppHero) : 'онлайн'],
     first: {turn: firstLocal, forced}
   });
 }
@@ -1656,9 +1918,9 @@ function onRematchUpdate(){
 /* ---------- menu & overlays ---------- */
 const MODE_HINTS = {
   run: 'Пять соперников подряд. После каждой победы — выбор из трёх даров.',
-  ai: 'Одна партия по классическим правилам против компьютера.',
-  pvp: 'Классика вдвоём на одном устройстве.',
-  online: 'Создайте комнату и отправьте ссылку другу — он подключится из своего браузера. Правила дуэли (с дарами или без) выбирает тот, кто создаёт комнату.'
+  ai: 'Одна партия против компьютера. У вас и у соперника — герои со способностями.',
+  pvp: 'Классика вдвоём на одном устройстве, без героев и даров.',
+  online: 'Создайте комнату и отправьте ссылку другу — он подключится из своего браузера. Правила дуэли выбирает тот, кто создаёт комнату.'
 };
 function syncMenu(){
   document.querySelectorAll('.seg').forEach(seg => {
@@ -1667,6 +1929,8 @@ function syncMenu(){
   });
   const mode = settings.mode;
   $('#modeHint').textContent = MODE_HINTS[mode];
+  $('#heroField').style.display = mode === 'pvp' ? 'none' : '';
+  $('#btnHero').innerHTML = heroPickHtml(settings.hero);
   $('#levelField').style.display = mode === 'ai' ? '' : 'none';
   $('#onlineField').style.display = mode === 'online' ? '' : 'none';
   $('#inpName').value = settings.name || '';
@@ -1674,7 +1938,7 @@ function syncMenu(){
   $('#btnLeave').classList.toggle('hidden', !NET.active);
   const canContinue = mode === 'run' && R && !inGame();
   $('#btnContinueRun').classList.toggle('hidden', !canContinue);
-  if (R) $('#btnContinueRun').textContent = `Продолжить поход · этап ${R.stage + 1} · ${'❤️'.repeat(R.lives)}`;
+  if (R) $('#btnContinueRun').textContent = `Продолжить поход · этап ${R.stage + 1} · ${hearts(R.lives)}`;
   const startBtn = $('#btnStart');
   startBtn.classList.toggle('hidden', mode === 'online');
   startBtn.textContent = mode === 'run' ? 'Новый поход' : 'Новая игра';
@@ -1682,7 +1946,8 @@ function syncMenu(){
   startBtn.classList.toggle('ghost', canContinue);
   if (mode === 'run'){
     const b = store.get('kb.runBest', {best:0, clears:0});
-    $('#stats').textContent = `Лучший поход: ${b.best} из ${STAGES.length} этапов · пройден целиком: ${b.clears}`;
+    $('#stats').textContent = `Лучший поход: ${b.best} из ${STAGES.length} этапов · пройден целиком: ${b.clears}`
+      + (canContinue && R.hero !== settings.hero ? ` · в текущем походе герой — ${heroFull(R.hero)}` : '');
   } else if (mode === 'ai'){
     const st = (store.get('kb.stats', {})[settings.level]) || {w:0, l:0, d:0};
     $('#stats').textContent = `Против «${LEVELS[settings.level]}»: побед ${st.w} · поражений ${st.l} · ничьих ${st.d}`;
@@ -1702,6 +1967,9 @@ document.querySelectorAll('.seg').forEach(seg => {
   });
 });
 $('#inpName').addEventListener('input', e => { settings.name = e.target.value.slice(0, 16); saveSettings(); });
+$('#btnHero').addEventListener('click', showHeroes);
+$('#btnHeroesClose').addEventListener('click', showMenu);
+heroEls.forEach(el => el.addEventListener('click', openRelicsView));
 $('#btnStart').addEventListener('click', () => settings.mode === 'run' ? startRun() : newGame());
 $('#btnContinueRun').addEventListener('click', continueRun);
 $('#btnResume').addEventListener('click', hideMenu);
@@ -1736,12 +2004,14 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape'){
     if (isShown(rulesEl)) return hide(rulesEl);
     if (isShown(rvEl)) return hide(rvEl);
+    if (isShown(heroesEl)) return showMenu();
     if (isShown(menuEl) && inGame()) return hideMenu();
   }
   if (overlays.some(isShown)) return;
   if (['1','2','3'].includes(e.key)) onColumn(S.turn, Number(e.key) - 1);
-  else if (e.code === 'KeyR') useReroll();
-  else if (e.code === 'KeyF') useFlip();
+  else if (e.code === 'KeyR') useAbility('reroll');
+  else if (e.code === 'KeyF') useAbility('flip');
+  else if (e.code === 'KeyS') useAbility('six');
 });
 
 /* rule examples */
@@ -1764,11 +2034,12 @@ document.querySelectorAll('.ex').forEach(ex => {
 [6, 3, 5].forEach(v => $('#menuDice').appendChild(makeDie(v)));
 
 /* boot */
+if (R) fixRun();
 buildBoards();
 render();
 const roomParam = new URLSearchParams(location.search).get('room');
 if (roomParam){
-  // opened from an invite link: join straight away (the network module loads async; joinRoom waits for it)
+  // opened from an invite link: join straight away (joinRoom waits for the network module)
   history.replaceState(null, '', location.pathname);
   settings.mode = 'online';
   saveSettings();
@@ -1776,7 +2047,7 @@ if (roomParam){
 } else showMenu();
 
 // test hook for automated checks (harmless in production)
-window.__kb = {S, NET, RELICS, colScore, applyMove, chooseMove, get R(){ return R; }};
+window.__kb = {S, NET, RELICS, HEROES, colScore, applyMove, chooseMove, get R(){ return R; }};
 })();
 </script>
 </body>
